@@ -89,7 +89,14 @@ export function Sparkline({
 
   return (
     <svg width={width} height={height} className={cn("overflow-visible", className)} aria-hidden>
-      <path d={d} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d={d}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

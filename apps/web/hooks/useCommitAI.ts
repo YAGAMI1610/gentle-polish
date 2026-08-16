@@ -39,7 +39,7 @@ export type {
 /** Flag surfaced in the UI wherever placeholder data is rendered. */
 export const IS_DEMO_DATA = true;
 
-const settle = <T,>(value: T) => Promise.resolve(value);
+const settle = <T>(value: T) => Promise.resolve(value);
 
 export function useGoals() {
   return useQuery<Goal[]>({

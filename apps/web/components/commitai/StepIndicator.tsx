@@ -20,7 +20,12 @@ export function StepIndicator({
         return (
           <li key={label} className="flex flex-1 flex-col items-center gap-1.5">
             <div className="flex w-full items-center gap-1">
-              <span className={cn("h-px flex-1", i === 0 ? "bg-transparent" : done || active ? "bg-chain/50" : "bg-border")} />
+              <span
+                className={cn(
+                  "h-px flex-1",
+                  i === 0 ? "bg-transparent" : done || active ? "bg-chain/50" : "bg-border",
+                )}
+              />
               <span
                 aria-current={active ? "step" : undefined}
                 className={cn(

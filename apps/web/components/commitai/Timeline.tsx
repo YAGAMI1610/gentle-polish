@@ -33,13 +33,7 @@ export function TimelineItem({
   );
 }
 
-export function TimelineDot({
-  className,
-  filled,
-}: {
-  className?: string;
-  filled?: boolean;
-}) {
+export function TimelineDot({ className, filled }: { className?: string; filled?: boolean }) {
   return (
     <span
       aria-hidden

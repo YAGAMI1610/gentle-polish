@@ -102,7 +102,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="text-display text-lg text-verify">AI</span>
         </Link>
         <DropdownMenu>
-          <DropdownMenuTrigger className="rounded-lg p-2 text-muted-foreground hover:bg-accent" aria-label="More">
+          <DropdownMenuTrigger
+            className="rounded-lg p-2 text-muted-foreground hover:bg-accent"
+            aria-label="More"
+          >
             <MoreHorizontal className="size-5" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">

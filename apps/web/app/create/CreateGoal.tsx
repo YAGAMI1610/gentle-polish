@@ -69,11 +69,15 @@ export default function CreateGoal() {
               Good starting point. Where are you now — roughly how many books in the last year?
             </AgentBubble>
             <UserBubble>Maybe four.</UserBubble>
-            <AgentBubble>And what would feel like a real step up without wrecking your week?</AgentBubble>
+            <AgentBubble>
+              And what would feel like a real step up without wrecking your week?
+            </AgentBubble>
             <UserBubble>Twelve this year. One a month.</UserBubble>
             <AgentBubble>Is there a hard deadline, or is this ongoing?</AgentBubble>
             <UserBubble>End of the year.</UserBubble>
-            <AgentBubble>How often should I check in? Weekly tends to work best for reading.</AgentBubble>
+            <AgentBubble>
+              How often should I check in? Weekly tends to work best for reading.
+            </AgentBubble>
             <UserBubble>Weekly is fine.</UserBubble>
             <AgentBubble>
               Here's what I've written down. Change anything that isn't right.
@@ -144,18 +148,20 @@ export default function CreateGoal() {
           <ChatThread>
             <UserBubble>I want to run a marathon in six weeks. I don't run right now.</UserBubble>
             <AgentBubble tone="caution">
-              That's a big jump in a short time — let's talk about it. Going from no running to 42km in six
-              weeks usually ends in injury rather than a finish line. I'm not saying no; I want the goal to
-              be one you can actually clear.
+              That's a big jump in a short time — let's talk about it. Going from no running to 42km
+              in six weeks usually ends in injury rather than a finish line. I'm not saying no; I
+              want the goal to be one you can actually clear.
             </AgentBubble>
             <AgentBubble>
-              Two options: keep six weeks and aim for a 10K, or keep the marathon and give it five to six
-              months. Is there a date you're tied to?
+              Two options: keep six weeks and aim for a 10K, or keep the marathon and give it five
+              to six months. Is there a date you're tied to?
             </AgentBubble>
-            <UserBubble>There's a race I want to do with a friend, but there's a 10K on the day too.</UserBubble>
+            <UserBubble>
+              There's a race I want to do with a friend, but there's a 10K on the day too.
+            </UserBubble>
             <AgentBubble>
-              Then the 10K in six weeks is the honest version, and we can set the marathon as a follow-on
-              goal for spring. Want me to write it up that way?
+              Then the 10K in six weeks is the honest version, and we can set the marathon as a
+              follow-on goal for spring. Want me to write it up that way?
             </AgentBubble>
           </ChatThread>
           <Composer placeholder="Tell the agent what you'd rather do…" />

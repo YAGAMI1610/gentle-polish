@@ -60,11 +60,14 @@ function MilestoneRow({ milestone, last }: { milestone: Milestone; last: boolean
               onClick={() => setOpen((o) => !o)}
               className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-primary underline underline-offset-4"
             >
-              <Eye className="size-3.5" /> {open ? "Hide evidence details" : "Show evidence details"}
+              <Eye className="size-3.5" />{" "}
+              {open ? "Hide evidence details" : "Show evidence details"}
             </button>
             {open && (
               <div className="mt-2 rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
-                <p>Submitted {formatDate(v.submittedAt)} · {v.evidenceSummary}</p>
+                <p>
+                  Submitted {formatDate(v.submittedAt)} · {v.evidenceSummary}
+                </p>
                 <p className="mt-1">
                   Evidence stays private. Only this hash was anchored on-chain:{" "}
                   <span className="text-chain">{v.evidenceHash}</span>
@@ -129,7 +132,9 @@ export default function GoalDetail({ goalId }: { goalId: string }) {
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Check-in schedule</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Check-in schedule
+            </CardTitle>
           </CardHeader>
           <CardContent className="text-sm">
             <p>{goal.checkInFrequency}</p>
@@ -194,7 +199,8 @@ export default function GoalDetail({ goalId }: { goalId: string }) {
                   Reward on success
                 </p>
                 <p className="text-display text-2xl leading-none text-chain">
-                  {commitment.reward} <span className="text-sm font-normal">{commitment.token}</span>
+                  {commitment.reward}{" "}
+                  <span className="text-sm font-normal">{commitment.token}</span>
                 </p>
               </div>
             </div>
@@ -214,7 +220,9 @@ export default function GoalDetail({ goalId }: { goalId: string }) {
             >
               <ExternalLink className="size-3.5" aria-hidden />
               <span className="font-mono">{formatTxHash(commitment.txHash)}</span>
-              <span className="font-normal text-muted-foreground">on the explorer (placeholder)</span>
+              <span className="font-normal text-muted-foreground">
+                on the explorer (placeholder)
+              </span>
             </a>
           </CardContent>
         </Card>

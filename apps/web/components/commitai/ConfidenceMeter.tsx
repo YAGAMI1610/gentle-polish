@@ -23,7 +23,9 @@ export function ConfidenceMeter({
   return (
     <div className={cn("w-full", className)}>
       <div className="flex items-baseline justify-between text-xs">
-        <span className="font-medium uppercase tracking-[0.1em] text-muted-foreground">Confidence</span>
+        <span className="font-medium uppercase tracking-[0.1em] text-muted-foreground">
+          Confidence
+        </span>
         <span className={cn("text-display text-sm", accent.text)}>{value}%</span>
       </div>
       <div

@@ -43,10 +43,12 @@ export default function CheckIn() {
         <AgentBubble>
           Good. A few questions so I can mark it properly — nothing tricky, just specifics.
         </AgentBubble>
-        <AgentBubble>What was the central argument or turning point, in a sentence or two?</AgentBubble>
+        <AgentBubble>
+          What was the central argument or turning point, in a sentence or two?
+        </AgentBubble>
         <UserBubble>
-          It's about how attention gets shaped by the tools we use. The turn is when the author admits his
-          own habits didn't survive his research.
+          It's about how attention gets shaped by the tools we use. The turn is when the author
+          admits his own habits didn't survive his research.
         </UserBubble>
         <AgentBubble>Was there a section you disagreed with or found weak?</AgentBubble>
         <UserBubble>The policy chapter near the end. Felt thin compared to the rest.</UserBubble>
@@ -62,8 +64,9 @@ export default function CheckIn() {
           </div>
           <ConfidenceMeter value={89} status="verified" className="mt-4 max-w-xs" />
           <p className="mt-3 text-sm leading-relaxed">
-            Your answers include details that track with the book and with the time you say you spent. I'm
-            marking milestone 7 as verified. If anything I've got wrong, tell me and I'll reopen it.
+            Your answers include details that track with the book and with the time you say you
+            spent. I'm marking milestone 7 as verified. If anything I've got wrong, tell me and I'll
+            reopen it.
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button asChild size="sm">

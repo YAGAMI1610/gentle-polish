@@ -4,7 +4,13 @@ import { cn } from "@/lib/utils";
  * Marks any surface still rendering placeholder data.
  * Remove usages as each screen gets wired to the real backend.
  */
-export function DemoBadge({ className, label = "Demo data" }: { className?: string; label?: string }) {
+export function DemoBadge({
+  className,
+  label = "Demo data",
+}: {
+  className?: string;
+  label?: string;
+}) {
   return (
     <span
       className={cn(

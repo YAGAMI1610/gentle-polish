@@ -224,7 +224,11 @@ export default function Dashboard() {
                     Next check-in {formatDate(goal.nextCheckIn)} · {goal.checkInFrequency}
                   </p>
                   {latest && (
-                    <StatusChip status={latest.status} confidence={latest.confidence} className="mt-2" />
+                    <StatusChip
+                      status={latest.status}
+                      confidence={latest.confidence}
+                      className="mt-2"
+                    />
                   )}
                 </div>
                 <ProgressRing

@@ -86,8 +86,8 @@ export default function VerifyPage() {
             <Button disabled={text.trim().length === 0}>Send to your agent</Button>
           </div>
           <UiOnlyNote>
-            Text is the only path that would work without a backend today — and even here, nothing is sent
-            yet.
+            Text is the only path that would work without a backend today — and even here, nothing
+            is sent yet.
           </UiOnlyNote>
         </TabsContent>
 
@@ -131,7 +131,8 @@ export default function VerifyPage() {
             </Card>
           ))}
           <UiOnlyNote>
-            Data connections are not live yet. These are shown so you can see what would be available.
+            Data connections are not live yet. These are shown so you can see what would be
+            available.
           </UiOnlyNote>
         </TabsContent>
       </Tabs>
@@ -141,9 +142,9 @@ export default function VerifyPage() {
           <ShieldCheck className="size-4" aria-hidden />
         </span>
         <p className="text-xs leading-relaxed text-muted-foreground">
-          Your evidence stays private to you and your agent. If a goal has an on-chain commitment, only a
-          verification hash — a fingerprint of the result — is written to the chain. The photo, document or
-          text itself never leaves your account.
+          Your evidence stays private to you and your agent. If a goal has an on-chain commitment,
+          only a verification hash — a fingerprint of the result — is written to the chain. The
+          photo, document or text itself never leaves your account.
         </p>
       </div>
     </AppShell>

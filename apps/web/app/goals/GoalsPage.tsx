@@ -31,8 +31,8 @@ export default function GoalsPage() {
           <Target className="mx-auto size-8 text-muted-foreground" />
           <h2 className="mt-4 text-lg">Nothing tracked yet</h2>
           <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
-            Start with the thing you keep meaning to do. The agent will ask a few questions and turn it
-            into something checkable.
+            Start with the thing you keep meaning to do. The agent will ask a few questions and turn
+            it into something checkable.
           </p>
           <Button asChild className="mt-5 gap-2">
             <Link href="/create">

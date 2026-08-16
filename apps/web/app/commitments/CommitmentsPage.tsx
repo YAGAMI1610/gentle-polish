@@ -78,11 +78,21 @@ function CreateCommitmentFlow() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <Label htmlFor="amount">Amount to lock (BOT)</Label>
-                <Input id="amount" value={amount} onChange={(e) => setAmount(e.target.value)} className="mt-2" />
+                <Input
+                  id="amount"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  className="mt-2"
+                />
               </div>
               <div>
                 <Label htmlFor="reward">Reward on success (BOT)</Label>
-                <Input id="reward" value={reward} onChange={(e) => setReward(e.target.value)} className="mt-2" />
+                <Input
+                  id="reward"
+                  value={reward}
+                  onChange={(e) => setReward(e.target.value)}
+                  className="mt-2"
+                />
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -117,19 +127,23 @@ function CreateCommitmentFlow() {
               </p>
               <p>
                 <span className="font-medium">If you don't: </span>
-                your {amount} BOT still returns in full. You forfeit the reward — nothing more. CommitAI
-                never keeps your principal.
+                your {amount} BOT still returns in full. You forfeit the reward — nothing more.
+                CommitAI never keeps your principal.
               </p>
               <p>
                 <span className="font-medium">If you cancel early: </span>
-                your principal is released the same day, no penalty. The goal stays as accountability-only.
+                your principal is released the same day, no penalty. The goal stays as
+                accountability-only.
               </p>
             </div>
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setStep(1)}>
                 Back
               </Button>
-              <Button onClick={() => setStep(3)} className="gap-2 bg-chain text-chain-foreground hover:bg-chain/90">
+              <Button
+                onClick={() => setStep(3)}
+                className="gap-2 bg-chain text-chain-foreground hover:bg-chain/90"
+              >
                 <Wallet className="size-4" /> Continue to signing
               </Button>
             </div>
@@ -146,8 +160,8 @@ function CreateCommitmentFlow() {
               </p>
             </div>
             <UiOnlyNote>
-              Wallet signing is not live. Continuing simply shows what the confirmed state looks like — no
-              transaction is created and no funds move.
+              Wallet signing is not live. Continuing simply shows what the confirmed state looks
+              like — no transaction is created and no funds move.
             </UiOnlyNote>
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setStep(2)}>
@@ -167,7 +181,9 @@ function CreateCommitmentFlow() {
                 {amount} <span className="text-base font-normal">BOT locked</span>
               </p>
               <p className="mt-1 text-sm">{goal?.title}</p>
-              <p className="mt-3 text-xs text-muted-foreground">Transaction (placeholder pattern)</p>
+              <p className="mt-3 text-xs text-muted-foreground">
+                Transaction (placeholder pattern)
+              </p>
               <a
                 href={explorerUrl("0x0000000000000000000000000000000000000000")}
                 target="_blank"
@@ -178,8 +194,8 @@ function CreateCommitmentFlow() {
               </a>
             </div>
             <UiOnlyNote>
-              This is a mock confirmation. The hash pattern shows what a real receipt would look like; no
-              transaction exists.
+              This is a mock confirmation. The hash pattern shows what a real receipt would look
+              like; no transaction exists.
             </UiOnlyNote>
             <Button variant="ghost" onClick={() => setStep(0)}>
               Start over
@@ -209,9 +225,15 @@ export default function CommitmentsPage() {
             <CardContent className="py-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Badge variant="outline" className={STATUS_STYLE[c.status]}>
-                  {c.status === "active" ? "Active" : c.status === "completed" ? "Completed" : "Cancelled"}
+                  {c.status === "active"
+                    ? "Active"
+                    : c.status === "completed"
+                      ? "Completed"
+                      : "Cancelled"}
                 </Badge>
-                <span className="text-xs text-muted-foreground">Opened {formatDate(c.createdAt)}</span>
+                <span className="text-xs text-muted-foreground">
+                  Opened {formatDate(c.createdAt)}
+                </span>
               </div>
               <div className="mt-3 flex items-center gap-3">
                 <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-chain-soft ring-1 ring-chain/25">
@@ -255,7 +277,9 @@ export default function CommitmentsPage() {
               >
                 <ExternalLink className="size-3.5" aria-hidden />
                 <span className="font-mono">{formatTxHash(c.txHash)}</span>
-                <span className="font-normal text-muted-foreground">on the explorer (placeholder)</span>
+                <span className="font-normal text-muted-foreground">
+                  on the explorer (placeholder)
+                </span>
               </a>
             </CardContent>
           </Card>

@@ -39,7 +39,11 @@ export function statusAccent(status: VerificationStatus) {
 }
 
 export function statusIcon(status: VerificationStatus) {
-  return status === "verified" ? ShieldCheck : status === "needs-evidence" ? CircleHelp : CircleDashed;
+  return status === "verified"
+    ? ShieldCheck
+    : status === "needs-evidence"
+      ? CircleHelp
+      : CircleDashed;
 }
 
 export function StatusChip({
