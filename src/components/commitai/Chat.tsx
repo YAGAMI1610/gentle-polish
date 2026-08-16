@@ -18,9 +18,6 @@ export function AgentBubble({
     <div className="flex max-w-[88%] gap-3 sm:max-w-[72%]">
       <AgentMark className="mt-0.5 size-8" />
       <div className="min-w-0">
-        <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-          Your agent
-        </p>
         <div
           className={cn(
             "rounded-2xl rounded-tl-sm border border-border bg-card px-4 py-3 text-sm leading-relaxed text-card-foreground shadow-soft",

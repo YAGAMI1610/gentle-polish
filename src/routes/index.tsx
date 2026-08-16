@@ -71,7 +71,7 @@ function Dashboard() {
             Nothing here is judgement — just where things actually stand.
           </p>
 
-          <div className="mt-7 grid gap-3 sm:grid-cols-3">
+          <div className="mt-7 grid gap-3 sm:grid-cols-2">
             {goals.map((goal) => {
               const latest = [...goal.milestones]
                 .reverse()
@@ -91,8 +91,8 @@ function Dashboard() {
                 >
                   <CategoryIcon category={goalCategory(goal)} size="sm" />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{goal.title}</p>
-                    <p className="mt-0.5 truncate text-xs text-muted-foreground">{status}</p>
+                    <p className="text-sm font-medium leading-snug">{goal.title}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{status}</p>
                   </div>
                   <ProgressRing
                     value={goal.progress}
