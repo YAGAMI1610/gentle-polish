@@ -68,7 +68,7 @@ function VerifyPage() {
             <TabsTrigger
               key={o.value}
               value={o.value}
-              className="h-full flex-col items-start gap-2 rounded-2xl border border-border bg-card p-4 text-left shadow-soft data-[state=active]:border-verify/40 data-[state=active]:bg-verify-soft data-[state=active]:shadow-none"
+              className="h-full flex-col items-start gap-2 whitespace-normal rounded-2xl border border-border bg-card p-4 text-left shadow-soft data-[state=active]:border-verify/40 data-[state=active]:bg-verify-soft data-[state=active]:shadow-none"
             >
               <img
                 src={o.art}
