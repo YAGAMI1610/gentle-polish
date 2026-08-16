@@ -16,6 +16,22 @@ dist-ssr
 .nitro
 *.local
 
+# Next.js
+.next/
+next-env.d.ts
+.vercel
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Foundry (contracts/)
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lib/
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
@@ -30,3 +46,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# TypeScript incremental build info
+*.tsbuildinfo
