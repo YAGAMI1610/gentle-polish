@@ -1,8 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ArrowRight, Check, Coins, PenLine, Wallet } from "lucide-react";
+import { ArrowRight, ExternalLink, PenLine, Wallet } from "lucide-react";
 import { useState } from "react";
 
+import lockedFunds from "@/assets/locked-funds.png";
 import { AppShell } from "@/components/commitai/AppShell";
+import { StepIndicator } from "@/components/commitai/StepIndicator";
 import { DemoBadge, UiOnlyNote } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
 import { Badge } from "@/components/ui/badge";
@@ -59,21 +61,7 @@ function CreateCommitmentFlow() {
   return (
     <Card className="border-chain/30">
       <CardContent className="py-5">
-        <div className="mb-5 flex items-center gap-2">
-          {steps.map((label, i) => (
-            <div key={label} className="flex flex-1 items-center gap-2">
-              <span
-                className={cn(
-                  "flex size-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-medium",
-                  i <= step ? "border-chain bg-chain text-chain-foreground" : "border-border text-muted-foreground",
-                )}
-              >
-                {i < step ? <Check className="size-3" /> : i + 1}
-              </span>
-              {i < steps.length - 1 && <span className="h-px flex-1 bg-border" />}
-            </div>
-          ))}
-        </div>
+        <StepIndicator steps={steps} current={step} className="mb-6" />
 
         {step === 0 && (
           <div className="space-y-4">
@@ -188,7 +176,9 @@ function CreateCommitmentFlow() {
         {step === 4 && (
           <div className="space-y-4">
             <div className="rounded-xl border border-chain/30 bg-chain-soft p-5">
-              <p className="text-display text-2xl text-chain">{amount} BOT locked</p>
+              <p className="text-display text-3xl leading-none text-chain">
+                {amount} <span className="text-base font-normal">BOT locked</span>
+              </p>
               <p className="mt-1 text-sm">{goal?.title}</p>
               <p className="mt-3 text-xs text-muted-foreground">Transaction (placeholder pattern)</p>
               <a
