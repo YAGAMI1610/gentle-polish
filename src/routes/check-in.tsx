@@ -45,7 +45,9 @@ function CheckIn() {
             </p>
           </div>
         </div>
-        <DemoBadge />
+        <span className="shrink-0">
+          <DemoBadge />
+        </span>
       </div>
 
       <ChatThread>
