@@ -1,10 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Link2, Sparkles } from "lucide-react";
+import { ExternalLink, Link2 } from "lucide-react";
 import { useState } from "react";
 
+import { AgentMark } from "@/components/commitai/AgentMark";
 import { AppShell } from "@/components/commitai/AppShell";
 import { DemoBadge } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
+import { Timeline, TimelineItem } from "@/components/commitai/Timeline";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { explorerUrl, formatTxHash, useActivity } from "@/hooks/useCommitAI";
@@ -49,46 +51,54 @@ function ActivityPage() {
         </TabsList>
       </Tabs>
 
-      <ul>
+      <Timeline>
         {shown.map((e, i) => (
-          <li key={e.id} className="relative flex gap-4 pb-6">
-            {i < shown.length - 1 && (
-              <span className="absolute left-[15px] top-9 h-full w-px bg-border" aria-hidden />
-            )}
-            <div
-              className={cn(
-                "flex size-8 shrink-0 items-center justify-center rounded-full",
-                e.type === "ai" ? "bg-verify-soft text-verify" : "bg-chain-soft text-chain",
-              )}
-            >
-              {e.type === "ai" ? <Sparkles className="size-4" /> : <Link2 className="size-4" />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className={cn("text-sm font-medium", e.type === "chain" && "text-chain")}>{e.title}</p>
-                <span className="text-xs text-muted-foreground">
-                  {new Date(e.at).toLocaleDateString(undefined, {
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                  })}
-                </span>
-              </div>
-              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{e.detail}</p>
-              {e.txHash && (
-                <a
-                  href={explorerUrl(e.txHash)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-1 inline-block text-xs text-chain underline underline-offset-4"
+          <TimelineItem
+            key={e.id}
+            last={i === shown.length - 1}
+            node={
+              e.type === "ai" ? (
+                <AgentMark className="size-8 ring-4 ring-background" />
+              ) : (
+                <span
+                  aria-hidden
+                  className="flex size-8 shrink-0 rotate-45 items-center justify-center rounded-md bg-chain-soft text-chain ring-1 ring-chain/30"
                 >
-                  {formatTxHash(e.txHash)}
-                </a>
-              )}
+                  <Link2 className="size-4 -rotate-45" />
+                </span>
+              )
+            }
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <p className={cn("text-sm font-medium", e.type === "chain" && "text-chain")}>
+                {e.title}
+              </p>
+              <span className="text-xs text-muted-foreground">
+                {new Date(e.at).toLocaleDateString(undefined, {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                })}
+              </span>
             </div>
-          </li>
+            <p className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              {e.type === "ai" ? "Agent decision" : "On-chain event"}
+            </p>
+            <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{e.detail}</p>
+            {e.txHash && (
+              <a
+                href={explorerUrl(e.txHash)}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-chain/30 bg-chain-soft/60 px-2.5 py-1 font-mono text-xs text-chain transition-colors hover:bg-chain-soft"
+              >
+                <ExternalLink className="size-3" aria-hidden />
+                {formatTxHash(e.txHash)}
+              </a>
+            )}
+          </TimelineItem>
         ))}
-      </ul>
+      </Timeline>
     </AppShell>
   );
 }

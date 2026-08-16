@@ -2,8 +2,10 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Send } from "lucide-react";
 import { useState } from "react";
 
+import { AgentMark } from "@/components/commitai/AgentMark";
 import { AppShell } from "@/components/commitai/AppShell";
 import { AgentBubble, ChatThread, UserBubble } from "@/components/commitai/Chat";
+import { ConfidenceMeter } from "@/components/commitai/ConfidenceMeter";
 import { DemoBadge, UiOnlyNote } from "@/components/commitai/DemoBadge";
 import { StatusChip } from "@/components/commitai/StatusChip";
 import { Button } from "@/components/ui/button";
@@ -30,15 +32,18 @@ function CheckIn() {
 
   return (
     <AppShell>
-      <div className="mb-5 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-            Weekly check-in
-          </p>
-          <h1 className="mt-1 text-2xl leading-tight">Read 12 books this year</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Let's make sure this counts. Honest answers help more than impressive ones.
-          </p>
+      <div className="mb-6 flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <AgentMark className="mt-1 size-10" />
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+              Weekly check-in
+            </p>
+            <h1 className="mt-1 text-2xl leading-tight">Read 12 books this year</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Let's make sure this counts. Honest answers help more than impressive ones.
+            </p>
+          </div>
         </div>
         <DemoBadge />
       </div>
@@ -60,12 +65,13 @@ function CheckIn() {
         <UserBubble>Around 300 pages. Mostly on the train.</UserBubble>
       </ChatThread>
 
-      <Card className="mt-5 border-verify/30 bg-verify-soft">
+      <Card className="mt-6 border-verify/30 bg-verify-soft">
         <CardContent className="py-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <StatusChip status="verified" confidence={89} />
+            <StatusChip status="verified" />
             <DemoBadge />
           </div>
+          <ConfidenceMeter value={89} status="verified" className="mt-4 max-w-xs" />
           <p className="mt-3 text-sm leading-relaxed">
             Your answers include details that track with the book and with the time you say you spent. I'm
             marking milestone 7 as verified. If anything I've got wrong, tell me and I'll reopen it.

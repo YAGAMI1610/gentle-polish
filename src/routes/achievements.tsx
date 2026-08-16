@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Award, Flame, Lock } from "lucide-react";
+import { Flame, Lock } from "lucide-react";
 
+import { AchievementMedal, medalKind } from "@/components/commitai/AchievementMedal";
 import { AppShell } from "@/components/commitai/AppShell";
 import { DemoBadge } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
@@ -45,21 +46,28 @@ function AchievementsPage() {
 
       <div className="grid gap-3 sm:grid-cols-2">
         {achievements.map((a) => (
-          <Card key={a.id} className={cn(!a.earned && "opacity-60")}>
-            <CardContent className="flex gap-3 py-4">
-              <div
-                className={cn(
-                  "flex size-10 shrink-0 items-center justify-center rounded-full",
-                  a.earned ? "bg-verify-soft text-verify" : "bg-muted text-muted-foreground",
-                )}
-              >
-                {a.earned ? <Award className="size-5" /> : <Lock className="size-4" />}
-              </div>
-              <div>
-                <p className="text-sm font-medium">{a.name}</p>
+          <Card
+            key={a.id}
+            className={cn(
+              "transition-colors",
+              a.earned ? "border-verify/25" : "border-dashed bg-muted/30",
+            )}
+          >
+            <CardContent className="flex gap-4 py-4">
+              <AchievementMedal kind={medalKind(a)} earned={a.earned} />
+              <div className="min-w-0">
+                <p className={cn("text-sm font-medium", !a.earned && "text-muted-foreground")}>
+                  {a.name}
+                </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{a.description}</p>
-                {a.earned && a.earnedAt && (
-                  <p className="mt-1 text-xs text-verify">Earned {formatDate(a.earnedAt)}</p>
+                {a.earned && a.earnedAt ? (
+                  <p className="mt-1.5 text-xs font-medium text-verify">
+                    Earned {formatDate(a.earnedAt)}
+                  </p>
+                ) : (
+                  <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <Lock className="size-3" aria-hidden /> Not yet
+                  </p>
                 )}
               </div>
             </CardContent>

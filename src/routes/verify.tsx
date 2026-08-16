@@ -1,7 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { FileText, Github, Lock, Plug, Upload, Watch } from "lucide-react";
+import { FileText, Github, ShieldCheck, Upload, Watch } from "lucide-react";
 import { useState } from "react";
 
+import evConnect from "@/assets/ev-connect.png";
+import evText from "@/assets/ev-text.png";
+import evUpload from "@/assets/ev-upload.png";
 import { AppShell } from "@/components/commitai/AppShell";
 import { DemoBadge, UiOnlyNote } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
@@ -25,6 +28,27 @@ export const Route = createFileRoute("/verify")({
   component: VerifyPage,
 });
 
+const OPTIONS = [
+  {
+    value: "text",
+    art: evText,
+    label: "Write it out",
+    detail: "A short reflection in your own words",
+  },
+  {
+    value: "upload",
+    art: evUpload,
+    label: "Upload a file",
+    detail: "Photo, screenshot or document",
+  },
+  {
+    value: "connect",
+    art: evConnect,
+    label: "Connect data",
+    detail: "Let a service confirm it for you",
+  },
+] as const;
+
 function VerifyPage() {
   const [text, setText] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
@@ -39,16 +63,28 @@ function VerifyPage() {
       />
 
       <Tabs defaultValue="text">
-        <TabsList className="w-full">
-          <TabsTrigger value="text" className="flex-1 gap-1.5">
-            <FileText className="size-4" /> Text
-          </TabsTrigger>
-          <TabsTrigger value="upload" className="flex-1 gap-1.5">
-            <Upload className="size-4" /> Upload
-          </TabsTrigger>
-          <TabsTrigger value="connect" className="flex-1 gap-1.5">
-            <Plug className="size-4" /> Connect
-          </TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-3 gap-2 bg-transparent p-0">
+          {OPTIONS.map((o) => (
+            <TabsTrigger
+              key={o.value}
+              value={o.value}
+              className="h-full flex-col items-start gap-2 rounded-2xl border border-border bg-card p-4 text-left shadow-soft data-[state=active]:border-verify/40 data-[state=active]:bg-verify-soft data-[state=active]:shadow-none"
+            >
+              <img
+                src={o.art}
+                alt=""
+                aria-hidden
+                loading="lazy"
+                width={512}
+                height={512}
+                className="size-9 object-contain"
+              />
+              <span className="text-sm font-medium">{o.label}</span>
+              <span className="hidden text-xs font-normal leading-snug text-muted-foreground sm:block">
+                {o.detail}
+              </span>
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         <TabsContent value="text" className="mt-5 space-y-3">
@@ -113,8 +149,10 @@ function VerifyPage() {
         </TabsContent>
       </Tabs>
 
-      <div className="mt-6 flex gap-3 rounded-xl border border-border bg-muted/40 p-4">
-        <Lock className="mt-0.5 size-4 shrink-0 text-verify" />
+      <div className="mt-6 flex gap-3 rounded-xl border border-verify/25 bg-verify-soft/50 p-4">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-background/70 text-verify ring-1 ring-verify/25">
+          <ShieldCheck className="size-4" aria-hidden />
+        </span>
         <p className="text-xs leading-relaxed text-muted-foreground">
           Your evidence stays private to you and your agent. If a goal has an on-chain commitment, only a
           verification hash — a fingerprint of the result — is written to the chain. The photo, document or
