@@ -120,19 +120,37 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur lg:hidden">
         <div className="mx-auto flex max-w-md items-stretch justify-between px-2 py-1.5">
-          {PRIMARY.map(({ to, label, icon: Icon }) => (
-            <Link
-              key={to}
-              to={to}
-              className={cn(
-                "flex flex-1 flex-col items-center gap-1 rounded-lg px-1 py-1.5 text-[10px] transition-colors",
-                isActive(to) ? "text-primary" : "text-muted-foreground",
-              )}
-            >
-              <Icon className={cn("size-5", isActive(to) && "stroke-[2.2]")} />
-              {label}
-            </Link>
-          ))}
+          {PRIMARY.map(({ to, label, icon: Icon }) => {
+            const active = isActive(to);
+            return (
+              <Link
+                key={to}
+                to={to}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "relative flex flex-1 flex-col items-center gap-1 rounded-lg px-1 pb-2 pt-1.5 text-[10px] transition-colors",
+                  active ? "font-medium text-primary" : "text-muted-foreground",
+                )}
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "absolute inset-x-3 top-0 h-0.5 rounded-full transition-opacity",
+                    active ? "bg-verify opacity-100" : "opacity-0",
+                  )}
+                />
+                <Icon className={cn("size-5", active && "stroke-[2.2]")} />
+                {label}
+                <span
+                  aria-hidden
+                  className={cn(
+                    "absolute bottom-0.5 size-1 rounded-full bg-verify transition-opacity",
+                    active ? "opacity-100" : "opacity-0",
+                  )}
+                />
+              </Link>
+            );
+          })}
         </div>
       </nav>
     </div>

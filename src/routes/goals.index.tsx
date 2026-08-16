@@ -1,13 +1,15 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Sparkles, Target } from "lucide-react";
+import { Coins, Sparkles, Target } from "lucide-react";
 
 import { AppShell } from "@/components/commitai/AppShell";
+import { CategoryIcon, goalCategory } from "@/components/commitai/CategoryIcon";
 import { DemoBadge } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
+import { ProgressRing } from "@/components/commitai/ProgressRing";
 import { StatusChip } from "@/components/commitai/StatusChip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
 import { formatDate, useGoals } from "@/hooks/useCommitAI";
 
 export const Route = createFileRoute("/goals/")({
@@ -53,39 +55,54 @@ function GoalsPage() {
       <div className="space-y-4">
         {goals.map((goal) => {
           const latest = [...goal.milestones].reverse().find((m) => m.verification)?.verification;
+          const backed = goal.mode === "self-commitment";
           return (
             <Link
               key={goal.id}
               to="/goals/$goalId"
               params={{ goalId: goal.id }}
-              className="block rounded-2xl border border-border bg-card p-5 shadow-soft transition-colors hover:bg-accent/40"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge
-                  variant="outline"
-                  className={
-                    goal.mode === "self-commitment"
-                      ? "border-chain/40 text-chain"
-                      : "border-border text-muted-foreground"
-                  }
-                >
-                  {goal.mode === "self-commitment" ? "Self-commitment" : "Accountability only"}
-                </Badge>
-                <span className="text-xs text-muted-foreground">
-                  Next check-in {formatDate(goal.nextCheckIn)}
-                </span>
-              </div>
-              <h2 className="mt-3 text-lg">{goal.title}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">{goal.summary}</p>
-              <div className="mt-4 flex items-center gap-3">
-                <Progress value={goal.progress} className="h-1.5" />
-                <span className="shrink-0 text-sm font-medium">{goal.progress}%</span>
-              </div>
-              {latest && (
-                <div className="mt-3">
-                  <StatusChip status={latest.status} confidence={latest.confidence} />
-                </div>
+              className={cn(
+                "block rounded-2xl border border-l-4 border-border bg-card p-5 shadow-soft transition-colors hover:bg-accent/40",
+                backed ? "border-l-chain" : "border-l-border",
               )}
+            >
+              <div className="flex items-start gap-4">
+                <CategoryIcon category={goalCategory(goal)} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "gap-1",
+                        backed
+                          ? "border-chain/40 bg-chain-soft text-chain"
+                          : "border-border text-muted-foreground",
+                      )}
+                    >
+                      {backed && <Coins className="size-3" aria-hidden />}
+                      {backed ? "Self-commitment" : "Accountability only"}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">
+                      Next check-in {formatDate(goal.nextCheckIn)}
+                    </span>
+                  </div>
+                  <h2 className="mt-2 text-lg">{goal.title}</h2>
+                  <p className="mt-1 text-sm text-muted-foreground">{goal.summary}</p>
+                  {latest && (
+                    <div className="mt-3">
+                      <StatusChip status={latest.status} confidence={latest.confidence} />
+                    </div>
+                  )}
+                </div>
+                <ProgressRing
+                  value={goal.progress}
+                  size={56}
+                  stroke={4.5}
+                  indicatorClassName={backed ? "text-chain" : "text-verify"}
+                >
+                  <span className="text-xs font-medium">{goal.progress}%</span>
+                </ProgressRing>
+              </div>
             </Link>
           );
         })}
