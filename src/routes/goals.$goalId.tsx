@@ -1,10 +1,14 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ChevronLeft, Coins, Eye } from "lucide-react";
+import { ChevronLeft, ExternalLink, Eye } from "lucide-react";
 import { useState } from "react";
 
+import lockedFunds from "@/assets/locked-funds.png";
 import { AppShell } from "@/components/commitai/AppShell";
+import { CategoryIcon, goalCategory } from "@/components/commitai/CategoryIcon";
+import { ConfidenceMeter } from "@/components/commitai/ConfidenceMeter";
 import { DemoBadge } from "@/components/commitai/DemoBadge";
-import { StatusChip } from "@/components/commitai/StatusChip";
+import { StatusChip, statusAccent } from "@/components/commitai/StatusChip";
+import { Timeline, TimelineItem } from "@/components/commitai/Timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,17 +38,22 @@ export const Route = createFileRoute("/goals/$goalId")({
 function MilestoneRow({ milestone, last }: { milestone: Milestone; last: boolean }) {
   const [open, setOpen] = useState(false);
   const v = milestone.verification;
+  const accent = statusAccent(v?.status ?? "pending");
 
   return (
-    <li className="relative flex gap-4 pb-6">
-      {!last && <span className="absolute left-[7px] top-5 h-full w-px bg-border" aria-hidden />}
-      <span
-        className={cn(
-          "mt-1 size-3.5 shrink-0 rounded-full border-2",
-          milestone.done ? "border-verify bg-verify" : "border-border bg-background",
-        )}
-        aria-hidden
-      />
+    <TimelineItem
+      last={last}
+      node={
+        <span
+          aria-hidden
+          className={cn(
+            "mt-1 size-4 rounded-full border-2 ring-4 ring-background",
+            v ? accent.dot : "border-border bg-background",
+            v?.status === "verified" && "bg-verify",
+          )}
+        />
+      }
+    >
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="font-medium">{milestone.title}</p>
@@ -52,7 +61,8 @@ function MilestoneRow({ milestone, last }: { milestone: Milestone; last: boolean
         </div>
         {v ? (
           <div className="mt-2 rounded-xl border border-border bg-card p-3">
-            <StatusChip status={v.status} confidence={v.confidence} />
+            <StatusChip status={v.status} />
+            <ConfidenceMeter value={v.confidence} status={v.status} className="mt-3" />
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{v.reasoning}</p>
             <button
               type="button"
@@ -75,7 +85,7 @@ function MilestoneRow({ milestone, last }: { milestone: Milestone; last: boolean
           <p className="mt-1 text-sm text-muted-foreground">Not checked in yet.</p>
         )}
       </div>
-    </li>
+    </TimelineItem>
   );
 }
 
@@ -100,21 +110,26 @@ function GoalDetail() {
         </Link>
       </Button>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge
-          variant="outline"
-          className={
-            goal.mode === "self-commitment"
-              ? "border-chain/40 text-chain"
-              : "border-border text-muted-foreground"
-          }
-        >
-          {goal.mode === "self-commitment" ? "Self-commitment" : "Accountability only"}
-        </Badge>
-        <DemoBadge />
+      <div className="flex items-start gap-4">
+        <CategoryIcon category={goalCategory(goal)} />
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge
+              variant="outline"
+              className={
+                goal.mode === "self-commitment"
+                  ? "border-chain/40 bg-chain-soft text-chain"
+                  : "border-border text-muted-foreground"
+              }
+            >
+              {goal.mode === "self-commitment" ? "Self-commitment" : "Accountability only"}
+            </Badge>
+            <DemoBadge />
+          </div>
+          <h1 className="mt-2 text-2xl leading-tight sm:text-3xl">{goal.title}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{goal.summary}</p>
+        </div>
       </div>
-      <h1 className="mt-3 text-2xl leading-tight sm:text-3xl">{goal.title}</h1>
-      <p className="mt-2 text-sm text-muted-foreground">{goal.summary}</p>
 
       <div className="mt-4 flex items-center gap-3">
         <Progress value={goal.progress} className="h-2" />
@@ -155,35 +170,61 @@ function GoalDetail() {
       </div>
 
       {commitment && (
-        <Card className="mt-4 border-chain/40 bg-chain-soft">
+        <Card className="mt-6 border-chain/40 bg-chain-soft ring-1 ring-chain/10">
           <CardHeader className="flex-row items-center justify-between gap-2 pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium text-chain">
-              <Coins className="size-4" /> On-chain commitment terms
+            <CardTitle className="flex items-center gap-2.5 text-sm font-medium text-chain">
+              <span className="flex size-9 items-center justify-center rounded-xl bg-background/70 ring-1 ring-chain/25">
+                <img
+                  src={lockedFunds}
+                  alt=""
+                  aria-hidden
+                  loading="lazy"
+                  width={512}
+                  height={512}
+                  className="size-[64%] object-contain"
+                />
+              </span>
+              On-chain commitment terms
             </CardTitle>
             <DemoBadge />
           </CardHeader>
           <CardContent className="text-sm">
-            <p className="text-display text-2xl text-chain">
-              {commitment.amountLocked} {commitment.token} locked
-            </p>
-            <p className="mt-1 text-muted-foreground">
-              Reward on success: {commitment.reward} {commitment.token}
-            </p>
-            <p className="mt-3">
+            <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-chain/70">
+                  Locked
+                </p>
+                <p className="text-display text-3xl leading-none text-chain">
+                  {commitment.amountLocked}{" "}
+                  <span className="text-base font-normal">{commitment.token}</span>
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-chain/70">
+                  Reward on success
+                </p>
+                <p className="text-display text-2xl leading-none text-chain">
+                  {commitment.reward} <span className="text-sm font-normal">{commitment.token}</span>
+                </p>
+              </div>
+            </div>
+            <p className="mt-4">
               <span className="font-medium">Released when: </span>
               {commitment.releaseCondition}
             </p>
-            <p className="mt-2">
-              <span className="font-medium">If it doesn't happen: </span>
+            <p className="mt-2 text-muted-foreground">
+              <span className="font-medium text-foreground">If it doesn't happen: </span>
               {commitment.failurePath}
             </p>
             <a
               href={explorerUrl(commitment.txHash)}
               target="_blank"
               rel="noreferrer"
-              className="mt-3 inline-block text-xs font-medium text-chain underline underline-offset-4"
+              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-chain/30 bg-background/70 px-3 py-2 text-xs font-medium text-chain transition-colors hover:bg-background"
             >
-              {formatTxHash(commitment.txHash)} on the explorer (placeholder link)
+              <ExternalLink className="size-3.5" aria-hidden />
+              <span className="font-mono">{formatTxHash(commitment.txHash)}</span>
+              <span className="font-normal text-muted-foreground">on the explorer (placeholder)</span>
             </a>
           </CardContent>
         </Card>
@@ -191,11 +232,11 @@ function GoalDetail() {
 
       <section className="mt-8">
         <h2 className="mb-4 text-lg">Milestone timeline</h2>
-        <ul>
+        <Timeline>
           {goal.milestones.map((m, i) => (
             <MilestoneRow key={m.id} milestone={m} last={i === goal.milestones.length - 1} />
           ))}
-        </ul>
+        </Timeline>
       </section>
     </AppShell>
   );
