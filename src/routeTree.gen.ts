@@ -10,33 +10,167 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AchievementsRouteImport } from './routes/achievements'
+import { Route as ActivityRouteImport } from './routes/activity'
+import { Route as CheckInRouteImport } from './routes/check-in'
+import { Route as CommitmentsRouteImport } from './routes/commitments'
+import { Route as CreateRouteImport } from './routes/create'
+import { Route as ProfileRouteImport } from './routes/profile'
+import { Route as RewardsRouteImport } from './routes/rewards'
+import { Route as VerifyRouteImport } from './routes/verify'
+import { Route as GoalsIndexRouteImport } from './routes/goals.index'
+import { Route as GoalsGoalIdRouteImport } from './routes/goals.$goalId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AchievementsRoute = AchievementsRouteImport.update({
+  id: '/achievements',
+  path: '/achievements',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ActivityRoute = ActivityRouteImport.update({
+  id: '/activity',
+  path: '/activity',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CheckInRoute = CheckInRouteImport.update({
+  id: '/check-in',
+  path: '/check-in',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CommitmentsRoute = CommitmentsRouteImport.update({
+  id: '/commitments',
+  path: '/commitments',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CreateRoute = CreateRouteImport.update({
+  id: '/create',
+  path: '/create',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProfileRoute = ProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RewardsRoute = RewardsRouteImport.update({
+  id: '/rewards',
+  path: '/rewards',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VerifyRoute = VerifyRouteImport.update({
+  id: '/verify',
+  path: '/verify',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GoalsIndexRoute = GoalsIndexRouteImport.update({
+  id: '/goals/',
+  path: '/goals/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GoalsGoalIdRoute = GoalsGoalIdRouteImport.update({
+  id: '/goals/$goalId',
+  path: '/goals/$goalId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/achievements': typeof AchievementsRoute
+  '/activity': typeof ActivityRoute
+  '/check-in': typeof CheckInRoute
+  '/commitments': typeof CommitmentsRoute
+  '/create': typeof CreateRoute
+  '/profile': typeof ProfileRoute
+  '/rewards': typeof RewardsRoute
+  '/verify': typeof VerifyRoute
+  '/goals/$goalId': typeof GoalsGoalIdRoute
+  '/goals/': typeof GoalsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/achievements': typeof AchievementsRoute
+  '/activity': typeof ActivityRoute
+  '/check-in': typeof CheckInRoute
+  '/commitments': typeof CommitmentsRoute
+  '/create': typeof CreateRoute
+  '/profile': typeof ProfileRoute
+  '/rewards': typeof RewardsRoute
+  '/verify': typeof VerifyRoute
+  '/goals/$goalId': typeof GoalsGoalIdRoute
+  '/goals': typeof GoalsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/achievements': typeof AchievementsRoute
+  '/activity': typeof ActivityRoute
+  '/check-in': typeof CheckInRoute
+  '/commitments': typeof CommitmentsRoute
+  '/create': typeof CreateRoute
+  '/profile': typeof ProfileRoute
+  '/rewards': typeof RewardsRoute
+  '/verify': typeof VerifyRoute
+  '/goals/$goalId': typeof GoalsGoalIdRoute
+  '/goals/': typeof GoalsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    | '/'
+    | '/achievements'
+    | '/activity'
+    | '/check-in'
+    | '/commitments'
+    | '/create'
+    | '/profile'
+    | '/rewards'
+    | '/verify'
+    | '/goals/$goalId'
+    | '/goals/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    | '/'
+    | '/achievements'
+    | '/activity'
+    | '/check-in'
+    | '/commitments'
+    | '/create'
+    | '/profile'
+    | '/rewards'
+    | '/verify'
+    | '/goals/$goalId'
+    | '/goals'
+  id:
+    | '__root__'
+    | '/'
+    | '/achievements'
+    | '/activity'
+    | '/check-in'
+    | '/commitments'
+    | '/create'
+    | '/profile'
+    | '/rewards'
+    | '/verify'
+    | '/goals/$goalId'
+    | '/goals/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AchievementsRoute: typeof AchievementsRoute
+  ActivityRoute: typeof ActivityRoute
+  CheckInRoute: typeof CheckInRoute
+  CommitmentsRoute: typeof CommitmentsRoute
+  CreateRoute: typeof CreateRoute
+  ProfileRoute: typeof ProfileRoute
+  RewardsRoute: typeof RewardsRoute
+  VerifyRoute: typeof VerifyRoute
+  GoalsGoalIdRoute: typeof GoalsGoalIdRoute
+  GoalsIndexRoute: typeof GoalsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +182,91 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/achievements': {
+      id: '/achievements'
+      path: '/achievements'
+      fullPath: '/achievements'
+      preLoaderRoute: typeof AchievementsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/activity': {
+      id: '/activity'
+      path: '/activity'
+      fullPath: '/activity'
+      preLoaderRoute: typeof ActivityRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/check-in': {
+      id: '/check-in'
+      path: '/check-in'
+      fullPath: '/check-in'
+      preLoaderRoute: typeof CheckInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/commitments': {
+      id: '/commitments'
+      path: '/commitments'
+      fullPath: '/commitments'
+      preLoaderRoute: typeof CommitmentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/create': {
+      id: '/create'
+      path: '/create'
+      fullPath: '/create'
+      preLoaderRoute: typeof CreateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/profile': {
+      id: '/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof ProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/rewards': {
+      id: '/rewards'
+      path: '/rewards'
+      fullPath: '/rewards'
+      preLoaderRoute: typeof RewardsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/verify': {
+      id: '/verify'
+      path: '/verify'
+      fullPath: '/verify'
+      preLoaderRoute: typeof VerifyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/goals/': {
+      id: '/goals/'
+      path: '/goals'
+      fullPath: '/goals/'
+      preLoaderRoute: typeof GoalsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/goals/$goalId': {
+      id: '/goals/$goalId'
+      path: '/goals/$goalId'
+      fullPath: '/goals/$goalId'
+      preLoaderRoute: typeof GoalsGoalIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AchievementsRoute: AchievementsRoute,
+  ActivityRoute: ActivityRoute,
+  CheckInRoute: CheckInRoute,
+  CommitmentsRoute: CommitmentsRoute,
+  CreateRoute: CreateRoute,
+  ProfileRoute: ProfileRoute,
+  RewardsRoute: RewardsRoute,
+  VerifyRoute: VerifyRoute,
+  GoalsGoalIdRoute: GoalsGoalIdRoute,
+  GoalsIndexRoute: GoalsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
