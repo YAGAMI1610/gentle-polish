@@ -226,12 +226,26 @@ function CommitmentsPage() {
                 </Badge>
                 <span className="text-xs text-muted-foreground">Opened {formatDate(c.createdAt)}</span>
               </div>
-              <p className="mt-3 text-display text-2xl text-chain">
-                <Coins className="mr-2 inline size-5" />
-                {c.amountLocked} {c.token}
-              </p>
-              <p className="mt-1 text-sm">{c.goalTitle}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <div className="mt-3 flex items-center gap-3">
+                <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-chain-soft ring-1 ring-chain/25">
+                  <img
+                    src={lockedFunds}
+                    alt=""
+                    aria-hidden
+                    loading="lazy"
+                    width={512}
+                    height={512}
+                    className="size-[62%] object-contain"
+                  />
+                </span>
+                <div>
+                  <p className="text-display text-3xl leading-none text-chain">
+                    {c.amountLocked} <span className="text-base font-normal">{c.token}</span>
+                  </p>
+                  <p className="mt-1.5 text-sm">{c.goalTitle}</p>
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
                 Reward on success: {c.reward} {c.token}
               </p>
 
@@ -250,9 +264,11 @@ function CommitmentsPage() {
                 href={explorerUrl(c.txHash)}
                 target="_blank"
                 rel="noreferrer"
-                className="mt-3 inline-block text-xs font-medium text-chain underline underline-offset-4"
+                className="mt-4 inline-flex items-center gap-2 rounded-lg border border-chain/30 bg-chain-soft/60 px-3 py-2 text-xs font-medium text-chain transition-colors hover:bg-chain-soft"
               >
-                {formatTxHash(c.txHash)} on the explorer (placeholder link)
+                <ExternalLink className="size-3.5" aria-hidden />
+                <span className="font-mono">{formatTxHash(c.txHash)}</span>
+                <span className="font-normal text-muted-foreground">on the explorer (placeholder)</span>
               </a>
             </CardContent>
           </Card>

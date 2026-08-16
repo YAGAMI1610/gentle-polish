@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Copy, Wallet } from "lucide-react";
 
 import { AppShell } from "@/components/commitai/AppShell";
+import { ProgressRing } from "@/components/commitai/ProgressRing";
 import { ConnectWalletDialog } from "@/components/commitai/ConnectWalletDialog";
 import { DemoBadge } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
@@ -78,16 +79,25 @@ function ProfilePage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-display text-5xl">{profile.accountabilityScore}</p>
-          <div className="mt-5 space-y-4">
+          <div className="flex items-center gap-5">
+            <ProgressRing value={profile.accountabilityScore} size={92} stroke={7}>
+              <span className="text-display text-2xl leading-none">
+                {profile.accountabilityScore}
+              </span>
+            </ProgressRing>
+            <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">
+              A running read on how your check-ins, evidence and follow-through hold up over time.
+            </p>
+          </div>
+          <div className="mt-6 space-y-4 border-t border-border pt-5">
             {profile.scoreBreakdown.map((item) => (
               <div key={item.label}>
-                <div className="flex items-center justify-between text-sm">
-                  <span>{item.label}</span>
-                  <span className="text-muted-foreground">{item.value}</span>
+                <div className="flex items-baseline justify-between text-sm">
+                  <span className="font-medium">{item.label}</span>
+                  <span className="text-display text-sm text-verify">{item.value}</span>
                 </div>
-                <Progress value={item.value} className="mt-1.5 h-1.5" />
-                <p className="mt-1 text-xs text-muted-foreground">{item.weight}</p>
+                <Progress value={item.value} className="mt-2 h-2" />
+                <p className="mt-1.5 text-xs text-muted-foreground">{item.weight}</p>
               </div>
             ))}
           </div>
@@ -96,14 +106,16 @@ function ProfilePage() {
 
       <div className="mb-6 grid grid-cols-3 gap-3">
         {[
-          { label: "Completed", value: profile.goalsCompleted },
-          { label: "Active", value: profile.goalsActive },
-          { label: "Abandoned", value: profile.goalsAbandoned },
+          { label: "Completed", value: profile.goalsCompleted, tone: "text-verify" },
+          { label: "Active", value: profile.goalsActive, tone: "text-foreground" },
+          { label: "Abandoned", value: profile.goalsAbandoned, tone: "text-muted-foreground" },
         ].map((s) => (
           <Card key={s.label}>
-            <CardContent className="py-4 text-center">
-              <p className="text-display text-2xl">{s.value}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{s.label}</p>
+            <CardContent className="py-5 text-center">
+              <p className={`text-display text-3xl leading-none ${s.tone}`}>{s.value}</p>
+              <p className="mt-2 text-xs uppercase tracking-[0.1em] text-muted-foreground">
+                {s.label}
+              </p>
             </CardContent>
           </Card>
         ))}
