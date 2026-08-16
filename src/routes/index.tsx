@@ -1,12 +1,15 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowRight, CalendarClock, Coins, Sparkles } from "lucide-react";
+import { ArrowRight, CalendarClock, Coins, Sparkles, TrendingUp } from "lucide-react";
 
+import heroTexture from "@/assets/hero-topo.jpg";
+import { AgentMark } from "@/components/commitai/AgentMark";
 import { AppShell } from "@/components/commitai/AppShell";
+import { CategoryIcon, goalCategory } from "@/components/commitai/CategoryIcon";
 import { DemoBadge } from "@/components/commitai/DemoBadge";
+import { ProgressRing, Sparkline } from "@/components/commitai/ProgressRing";
 import { StatusChip } from "@/components/commitai/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import {
   explorerUrl,
   formatDate,
@@ -44,23 +47,80 @@ function Dashboard() {
 
   return (
     <AppShell>
-      <div className="mb-6">
-        <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-          Sunday, 16 August
-        </p>
-        <h1 className="mt-1 text-3xl leading-tight">Three goals in motion. One needs a word.</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Nothing here is judgement — just where things actually stand.
-        </p>
-      </div>
+      <section className="relative -mx-4 overflow-hidden border-b border-border/70 px-4 pb-8 pt-6 sm:mx-0 sm:rounded-3xl sm:border sm:px-8 sm:pt-8">
+        <img
+          src={heroTexture}
+          alt=""
+          aria-hidden
+          width={1536}
+          height={768}
+          className="pointer-events-none absolute inset-0 size-full object-cover opacity-90"
+        />
+        <div
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-accent/25 via-background/40 to-background"
+          aria-hidden
+        />
+        <div className="relative">
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            Sunday, 16 August
+          </p>
+          <h1 className="mt-2 max-w-xl text-3xl leading-tight sm:text-4xl">
+            Three goals in motion. One needs a word.
+          </h1>
+          <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
+            Nothing here is judgement — just where things actually stand.
+          </p>
 
-      <Card className="mb-5 border-primary/20 bg-primary text-primary-foreground">
+          <div className="mt-7 grid gap-3 sm:grid-cols-3">
+            {goals.map((goal) => {
+              const latest = [...goal.milestones]
+                .reverse()
+                .find((m) => m.verification)?.verification;
+              const status =
+                latest?.status === "verified"
+                  ? "On track"
+                  : latest?.status === "needs-evidence"
+                    ? "Needs a word"
+                    : "Awaiting check-in";
+              return (
+                <Link
+                  key={goal.id}
+                  to="/goals/$goalId"
+                  params={{ goalId: goal.id }}
+                  className="group flex items-center gap-3 rounded-2xl border border-border/70 bg-card/80 p-3 shadow-soft backdrop-blur-sm transition-colors hover:border-border hover:bg-card"
+                >
+                  <CategoryIcon category={goalCategory(goal)} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{goal.title}</p>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">{status}</p>
+                  </div>
+                  <ProgressRing
+                    value={goal.progress}
+                    size={38}
+                    stroke={3.5}
+                    indicatorClassName={
+                      latest?.status === "needs-evidence" ? "text-caution" : "text-verify"
+                    }
+                  >
+                    <span className="text-[10px] font-medium">{goal.progress}</span>
+                  </ProgressRing>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <Card className="mb-6 mt-10 border-primary/20 bg-primary text-primary-foreground">
         <CardContent className="flex items-center justify-between gap-4 py-5">
-          <div>
-            <p className="text-display text-lg">Talk it through with your agent</p>
-            <p className="mt-1 text-sm opacity-80">
-              Book 7 came back needing more evidence. Two minutes should clear it up.
-            </p>
+          <div className="flex items-start gap-3">
+            <AgentMark tone="dark" className="mt-0.5" />
+            <div>
+              <p className="text-display text-lg">Talk it through with your agent</p>
+              <p className="mt-1 text-sm opacity-80">
+                Book 7 came back needing more evidence. Two minutes should clear it up.
+              </p>
+            </div>
           </div>
           <Button asChild variant="secondary" size="icon" className="shrink-0 rounded-full">
             <Link to="/check-in" aria-label="Start a check-in">
@@ -79,13 +139,29 @@ function Dashboard() {
             <DemoBadge />
           </CardHeader>
           <CardContent>
-            <p className="text-display text-4xl">{profile?.accountabilityScore ?? "—"}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Built from kept check-ins, verification strength and honesty on missed weeks.
-            </p>
-            <Button asChild variant="link" className="mt-1 h-auto p-0 text-xs">
-              <Link to="/profile">See the breakdown</Link>
-            </Button>
+            <div className="flex items-center gap-4">
+              <ProgressRing
+                value={profile?.accountabilityScore ?? 0}
+                size={76}
+                stroke={6}
+                indicatorClassName="text-verify"
+              >
+                <span className="text-display text-xl">{profile?.accountabilityScore ?? "—"}</span>
+              </ProgressRing>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-verify">
+                  <TrendingUp className="size-3.5" aria-hidden />
+                  <span className="text-xs font-medium">+4 this month</span>
+                  <Sparkline points={[62, 66, 65, 70, 74, 78]} className="text-verify/70" />
+                </div>
+                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                  Built from kept check-ins, verification strength and honesty on missed weeks.
+                </p>
+                <Button asChild variant="link" className="mt-0.5 h-auto p-0 text-xs">
+                  <Link to="/profile">See the breakdown</Link>
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -157,19 +233,28 @@ function Dashboard() {
                 key={goal.id}
                 to="/goals/$goalId"
                 params={{ goalId: goal.id }}
-                className="block rounded-xl border border-border bg-card p-4 shadow-soft transition-colors hover:bg-accent/40"
+                className="flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-soft transition-colors hover:bg-accent/40"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-medium">{goal.title}</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      Next check-in {formatDate(goal.nextCheckIn)} · {goal.checkInFrequency}
-                    </p>
-                  </div>
-                  <span className="text-display text-lg">{goal.progress}%</span>
+                <CategoryIcon category={goalCategory(goal)} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">{goal.title}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Next check-in {formatDate(goal.nextCheckIn)} · {goal.checkInFrequency}
+                  </p>
+                  {latest && (
+                    <StatusChip status={latest.status} confidence={latest.confidence} className="mt-2" />
+                  )}
                 </div>
-                <Progress value={goal.progress} className="mt-3 h-1.5" />
-                {latest && <StatusChip status={latest.status} confidence={latest.confidence} className="mt-3" />}
+                <ProgressRing
+                  value={goal.progress}
+                  size={52}
+                  stroke={4}
+                  indicatorClassName={
+                    latest?.status === "needs-evidence" ? "text-caution" : "text-verify"
+                  }
+                >
+                  <span className="text-xs font-medium">{goal.progress}%</span>
+                </ProgressRing>
               </Link>
             );
           })}
