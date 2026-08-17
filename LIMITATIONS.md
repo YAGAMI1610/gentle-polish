@@ -3,13 +3,15 @@
 Honest record of what is **not** yet real in this repo, per `CLAUDE.md` rules 1 and 6.
 Each entry states what exists today, why, and what the production fix is.
 
-Current build-sequence position: **step 3 core complete** — the Prisma schema, the
-offline-generated initial migration, and the wallet-scoped data-access layer (unit tests
-passing; DB-gated integration tests present) are all in place; see §9. Applying the
-migration to a live Postgres and running the integration suite is gated on a reachable
-database (§8), not on any missing code. Step 2's one outstanding piece is still the **live
-testnet deploy tx hash**, which needs a funded deployer key (see §2). Steps 4–12 of
-`CommitAI-Build-Prompt.md` §14 are outstanding.
+Current build-sequence position: **step 4 core complete** — the SDK-agnostic `AIProvider`
+boundary, the real `GeminiProvider`, the §7 prompt-injection guards, the `createGoal` tool
+wired end-to-end (Zod-validated → wallet-scoped DB write → decision-log audit entry), and the
+bounded agentic runner are all in place, typechecked against the real SDK and unit-tested; see
+§10. Steps 1–3 stand as recorded: the wallet-scoped data layer (§9), the contract + tests
+(§2), and the frontend labelling (§1). Live model calls and the DB-gated end-to-end / handler
+tests are gated on a key / a reachable Postgres (§8), not on any missing code. Step 2's one
+outstanding piece is still the **live testnet deploy tx hash**, which needs a funded deployer
+key (see §2). Steps 5–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
 
 ---
 
@@ -162,10 +164,11 @@ Not installed in this build environment (no root — installs are user-local to
   Postgres — set up either via the committed `docker-compose.yml`, a user-local Postgres, or
   a managed instance; `DATABASE_URL` is a `.env` placeholder. See the step-3 entry for how
   repository tests are gated when no DB is reachable.
-- **Gemini API key** (steps 4–6): the `GeminiProvider` is real; live calls need
-  `GEMINI_API_KEY`. Provider/tool logic is tested with an explicit in-test fake transport
-  (a test double, clearly not a production code path); an end-to-end test runs against the
-  live API only when the key is present.
+- **Gemini API key** (steps 4–6): the `GeminiProvider` is real and typechecks against the
+  installed `@google/genai` SDK; live calls need `GEMINI_API_KEY` (and optionally
+  `GEMINI_MODEL`). The runner/tool logic is unit-tested with an explicit in-test double
+  (`ScriptedProvider` — clearly not a production code path); the live end-to-end test
+  (`gemini.integration.test.ts`) runs only when a key is present. See §10.
 - **Funded testnet key** (step 8): see §2.
 
 ## 9. Step 3 — Prisma schema, migration, and wallet-scoped data-access layer
@@ -245,3 +248,60 @@ is recorded here, not silently cut):
 **No write endpoints were added.** The repositories are internal data-access only; no
 `app/api/*/route.ts` handler or server mutation ships in this step, so §4's "do not add
 write endpoints before this [CSRF/origin defence] is in place" is honoured.
+
+## 10. Step 4 — AI provider, prompt guards, and the createGoal tool end-to-end
+
+**Status:** real and verified offline. `pnpm --filter web typecheck`, `pnpm --filter web lint`,
+`pnpm format:check`, and the always-on tests all pass; the DB-gated and key-gated tests skip
+cleanly with printed run instructions.
+
+**What exists and is real:**
+
+- **Vendor boundary** — `lib/ai/provider.ts` defines the SDK-agnostic `AIProvider` interface
+  (a `kind`-discriminated `AIMessage` union, `ToolSpec`, `GenerateRequest`/`GenerateResult`).
+  `lib/ai/gemini.ts` is the ONLY file that imports the vendor SDK, so swapping models never
+  touches the tools, runner, or guards (build-prompt §1).
+- **Prompt-injection defence** — `lib/ai/promptGuards.ts` implements the SYSTEM / GOAL DATA /
+  EVIDENCE separation (§7): an immutable trust-boundary preamble plus delimiter neutralisation
+  that stops untrusted text forging a fence to "break out". Pure and fully unit-tested
+  (`promptGuards.test.ts`, always-on).
+- **One tool end-to-end** — `lib/ai/tools/createGoal.ts`: Zod-revalidated arguments →
+  wallet-scoped `createGoal` DB write → `logDecision` audit entry (§4/§10). Registered in
+  `lib/ai/tools/registry.ts`, which fails closed on unknown tools / invalid arguments.
+- **Runner** — `lib/ai/runner.ts` runs the bounded generate→dispatch→feed-back loop with a
+  `maxToolRounds` cap and a final tool-less answer when the budget is spent.
+- **Decision-log repository** — `lib/db/repositories/decisionLog.ts` (`logDecision` /
+  `listDecisions`), wallet-scoped like every other repo; a cross-wallet goal reference throws
+  `WalletScopeError`.
+
+**Deliberate deviation — SDK choice (CLAUDE.md rule 6, not a silent cut):** the build spec
+literally pins `@google/generative-ai`, but that is the frozen legacy SDK. This repo uses its
+current supported replacement `@google/genai` (pinned `2.17.1`), entirely behind the
+`AIProvider` boundary. Build-prompt §1 explicitly says to confirm the current model name at
+build time, and nothing above `gemini.ts` can tell which SDK is underneath.
+
+**Model + data-privacy caveat (build-prompt §9/§10):** the default model is `gemini-3.7-flash`
+(current free-tier Flash, function-calling capable), overridable via `GEMINI_MODEL`. On
+Google's FREE tier, prompts and responses may be used to improve Google's products. CommitAI
+is privacy-focused — raw evidence lives off-chain and only hashes are anchored — so:
+
+- the decision log stores only an evidence id / content hash in `evidenceRef`, NEVER raw
+  evidence (enforced by `createDecisionInput`);
+- a production deployment should use a paid tier (data excluded from training) or self-hosted
+  inference, and must never send raw evidence bytes to the model. This is recorded now; the
+  evidence-handling tools land in steps 6–7.
+
+**How the tests are gated:**
+
+- **Always run, no key or DB** — `promptGuards.test.ts` (10), the `createGoal` schema/params
+  tests (2), and the runner orchestration tests (3, driven by the `ScriptedProvider` in-test
+  double). These pass under `pnpm --filter web test`.
+- **DB-gated** — the `createGoal` handler test and the runner end-to-end test write real rows;
+  they sit behind `probeDatabaseReady()` and skip cleanly when no Postgres is reachable.
+- **Key-gated** — `gemini.integration.test.ts` makes a real call to the real model and asserts
+  it proposes a `createGoal` tool call; it runs only when `GEMINI_API_KEY` is set.
+
+**No write endpoints were added.** The AI layer is internal library code; no `app/api/*` route
+handler or server mutation ships in this step, so §4's rule (no write endpoints before
+CSRF/origin defence + SIWE) is still honoured. The AI holds no key and has no fund-moving path
+(CLAUDE.md rule 3).

@@ -83,3 +83,30 @@ export const createEvidenceInput = z.object({
   checkInId: idSchema.optional(),
 });
 export type CreateEvidenceInput = z.input<typeof createEvidenceInput>;
+
+/**
+ * Decision-log entry (build-prompt §4/§10). Written by AI tool handlers to record
+ * a decision that materially changed a goal's or a verification's state. This is
+ * an append-only audit record, not a trust boundary — it is called internally
+ * with an already-authenticated wallet — but its fields are still bounded here so
+ * the whole DB boundary stays parsed in one place.
+ *
+ * Privacy (§10): `evidenceRef` holds an evidence id or content hash ONLY, never
+ * raw evidence text — the raw bytes live solely in the Evidence table.
+ */
+export const createDecisionInput = z.object({
+  toolName: z.string().trim().min(1).max(100),
+  action: z.string().trim().min(1).max(100),
+  decision: z.string().trim().min(1).max(5000),
+  goalId: idSchema.optional(),
+  milestoneId: idSchema.optional(),
+  checkInId: idSchema.optional(),
+  // 0–100 confidence, when the tool expresses one.
+  confidence: z.number().int().min(0).max(100).optional(),
+  // Evidence id or content hash only — NEVER raw evidence (§10).
+  evidenceRef: z.string().trim().min(1).max(256).optional(),
+  // Exact format is finalized in the verification/chain steps; bounded here.
+  verificationHash: z.string().trim().min(1).max(128).optional(),
+  modelVersion: z.string().trim().min(1).max(100).optional(),
+});
+export type CreateDecisionInput = z.input<typeof createDecisionInput>;
