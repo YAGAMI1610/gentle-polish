@@ -1,0 +1,32 @@
+# Local Postgres for CommitAI development and the DB-gated integration tests.
+#
+# Matches the placeholder DATABASE_URL in apps/web/.env.example:
+#   postgresql://user:password@localhost:5432/commitai?schema=public
+#
+# Usage:
+#   docker compose up -d db
+#   pnpm --filter web exec prisma migrate deploy   # apply prisma/migrations
+#   pnpm --filter web test                         # integration tests now run
+#
+# Dev/test tooling only — these credentials are intentionally trivial and must
+# never be used for a real deployment.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: commitai
+    ports:
+      - "5432:5432"
+    volumes:
+      - commitai-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d commitai"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  commitai-pgdata:

@@ -1,0 +1,449 @@
+// CommitAI — Prisma schema (build sequence step 3, CommitAI-Build-Prompt.md §14.3)
+//
+// Design contract for this file:
+//   * Aligns to the exact TS shapes the UI already consumes in
+//     apps/web/lib/demo-data.ts, so step 9 only swaps hook queryFn bodies.
+//   * Mirrors the on-chain source of truth in contracts/src/CommitmentVault.sol
+//     (CommitmentStatus, confidenceThreshold, goalHash/verificationHash,
+//     onchain ids) so the DB is a faithful off-chain index, never a second
+//     ledger of money.
+//   * Enforces the privacy model (§9): raw evidence lives OFF-chain here; only
+//     hashes are ever anchored on-chain. storageKey / contentText / message are
+//     off-chain-only columns and must never be written into an on-chain field.
+//   * Enforces wallet-scoped isolation (§9/§10): every user-owned row carries a
+//     walletAddress and is indexed by it. Repositories scope every query by the
+//     authenticated wallet; a cross-wallet read must return empty/403.
+//   * Money safety (CLAUDE.md rule 2): rows here are an index/cache. Deleting a
+//     row never moves funds — the contract's pull-payment model is the only
+//     path that moves value. No column lets an admin redirect funds.
+//
+// Rationale notes that don't fit here (wei as Decimal(78,0), onchain ids as
+// BigInt, Reward modelled as a view over a Commitment's reward leg rather than a
+// balance table, achievement catalog deferred) are recorded in LIMITATIONS.md.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+  // Default output (node_modules/.prisma/client). binaryTargets defaults to
+  // "native" (arm64 here); a production host on a different libc/arch must add
+  // its target — see LIMITATIONS.md step-3 entry.
+}
+
+// ===========================================================================
+// Enums
+// ===========================================================================
+
+// demo-data.ts GoalMode = "accountability" | "self-commitment"
+enum GoalMode {
+  ACCOUNTABILITY
+  SELF_COMMITMENT
+}
+
+// demo-data.ts GoalStatus = "active" | "completed" | "abandoned"
+enum GoalStatus {
+  ACTIVE
+  COMPLETED
+  ABANDONED
+}
+
+// Goal category drives which verification heuristics apply (build prompt §5/§6).
+enum GoalCategory {
+  FITNESS_WEIGHT
+  READING
+  RUNNING
+  CODING
+  LEARNING
+  SAVING
+  SPENDING
+  GENERIC
+}
+
+// Machine-readable cadence for scheduling. The human label the UI shows lives
+// alongside it in Goal.checkInFrequency (demo-data keeps a free-text string).
+enum CheckInFrequency {
+  DAILY
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  ON_COMPLETION
+}
+
+enum EvidenceType {
+  TEXT
+  PHOTO
+  SCREENSHOT
+  FILE
+  CONNECTED_TRACKER
+  GITHUB
+  TRANSACTION_DATA
+}
+
+// Superset of demo-data VerificationStatus ("verified" | "needs-evidence" |
+// "unverified" | "pending"). REJECTED_AS_INCONSISTENT is the honest outcome for
+// evidence that contradicts the goal (§6); it maps to "unverified" in the UI.
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  NEEDS_MORE_EVIDENCE
+  UNVERIFIED
+  REJECTED_AS_INCONSISTENT
+}
+
+// Sub-signals behind a confidence score. Kept coarse on purpose — the AI is not
+// a precise oracle and must not pretend to be (§6).
+enum SignalLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// EXACT mirror of CommitmentVault.sol `enum CommitmentStatus`. Order and names
+// match so the indexer can map the on-chain uint8 straight across.
+enum CommitmentStatus {
+  NONE
+  CREATED
+  ACTIVE
+  COMPLETION_REQUESTED
+  APPROVED
+  CANCELLED
+  CLOSED
+}
+
+// One kind per fund-affecting / state-affecting contract call we index.
+enum ChainTxKind {
+  REGISTER_GOAL
+  REGISTER_MILESTONE
+  CREATE_COMMITMENT
+  FUND_REWARD
+  LOCK_FUNDS
+  REQUEST_COMPLETION
+  APPROVE_COMPLETION
+  RELEASE_PRINCIPAL
+  CLAIM_REWARD
+  CANCEL_COMMITMENT
+}
+
+// ===========================================================================
+// Models
+// ===========================================================================
+
+/// The scoping root. `address` is a checksummed EVM address (the authenticated
+/// wallet from SIWE, step 8). Everything a user owns hangs off this and is
+/// filtered by it. Deleting a wallet cascades all of that wallet's data.
+model Wallet {
+  address   String   @id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  goals               Goal[]
+  checkIns            CheckIn[]
+  evidence            Evidence[]
+  verificationRecords VerificationRecord[]
+  commitments         Commitment[]
+  scoreLogs           AccountabilityScoreLog[]
+  decisionLogs        DecisionLog[]
+  chainTxs            ChainTransaction[]
+}
+
+/// A user goal. Maps to demo-data.ts `Goal`. `goalHash`/`onchainGoalId` are null
+/// until the goal is registered on-chain (registerGoal), then anchored.
+model Goal {
+  id            String @id @default(cuid())
+  walletAddress String
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  title   String
+  summary String
+
+  category GoalCategory @default(GENERIC)
+  mode     GoalMode
+  status   GoalStatus   @default(ACTIVE)
+  progress Int          @default(0) // 0-100, UI progress bar
+
+  // §5 goal-shaping slots the AI fills during the intake conversation.
+  currentState  String?
+  desiredState  String?
+  successMetric String?
+
+  // Human-facing cadence label (demo-data keeps a free-text string) plus the
+  // machine cadence used for scheduling next check-ins.
+  checkInFrequency String
+  checkInCadence   CheckInFrequency @default(WEEKLY)
+  nextCheckIn      DateTime?
+  deadline         DateTime?
+
+  // On-chain anchors (null until registerGoal succeeds).
+  goalHash      String? // sha256 hex of the canonical goal statement
+  onchainGoalId BigInt?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  milestones          Milestone[]
+  checkIns            CheckIn[]
+  evidence            Evidence[]
+  verificationRecords VerificationRecord[]
+  commitment          Commitment?
+  strategy            VerificationStrategy?
+  decisionLogs        DecisionLog[]
+  chainTxs            ChainTransaction[]
+
+  @@index([walletAddress])
+  @@index([walletAddress, status])
+}
+
+/// The AI-proposed, user-confirmed plan for how a goal gets verified (§6). The
+/// UI's `verificationStrategy: string[]` is derived from methods +
+/// requiredEvidence at the API layer.
+model VerificationStrategy {
+  id     String @id @default(cuid())
+  goalId String @unique
+  goal   Goal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  measurement         String // what concretely gets measured
+  methods             String[] // e.g. ["photo", "connected tracker"]
+  requiredEvidence    String[]
+  frequency           CheckInFrequency @default(WEEKLY)
+  confidenceThreshold Int              @default(70) // mirrors on-chain threshold
+  fallbackPlan        String?
+  rationale           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// A checkpoint within a goal. Maps to demo-data.ts `Milestone`.
+/// milestoneRef/verificationHash/onchainConfidence anchor registerMilestone.
+model Milestone {
+  id     String @id @default(cuid())
+  goalId String
+  goal   Goal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  title      String
+  dueDate    DateTime?
+  done       Boolean   @default(false)
+  orderIndex Int       @default(0)
+
+  // On-chain anchors (null until registerMilestone).
+  milestoneRef      String? // bytes32 hex reference
+  verificationHash  String?
+  onchainConfidence Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  checkIns            CheckIn[]
+  verificationRecords VerificationRecord[]
+
+  @@index([goalId])
+}
+
+/// A user check-in against a goal. `message` is UNTRUSTED user input (§5/CLAUDE
+/// rule 5): it is data, never an instruction to the AI.
+model CheckIn {
+  id            String @id @default(cuid())
+  goalId        String
+  goal          Goal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  walletAddress String
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  milestoneId String?
+  milestone   Milestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+
+  message   String // UNTRUSTED — treat as evidence data, not a prompt
+  createdAt DateTime @default(now())
+
+  evidence           Evidence[]
+  verificationRecord VerificationRecord?
+
+  @@index([walletAddress])
+  @@index([goalId])
+}
+
+/// Evidence attached to a check-in / goal. Raw content is OFF-chain only (§9):
+/// contentText and storageKey never leave the DB; only contentHash is eligible
+/// to be anchored on-chain. contentText is UNTRUSTED input.
+model Evidence {
+  id            String @id @default(cuid())
+  goalId        String
+  goal          Goal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  walletAddress String
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  checkInId String?
+  checkIn   CheckIn? @relation(fields: [checkInId], references: [id], onDelete: SetNull)
+
+  type        EvidenceType
+  contentText String? // UNTRUSTED, off-chain only
+  storageKey  String? // pointer to off-chain blob store; NEVER anchored on-chain
+  mimeType    String?
+  fileName    String?
+  sizeBytes   Int?
+  contentHash String // sha256 hex; this is the only part eligible for anchoring
+
+  createdAt DateTime @default(now())
+
+  @@index([walletAddress])
+  @@index([goalId])
+  @@index([checkInId])
+}
+
+/// An AI verification result. Maps to demo-data.ts `Verification`. `reasoning`
+/// must stay non-accusatory (§6). `evidenceHash` is the representative hash the
+/// UI shows; `verificationHash` is the canonical §6.5 hash that gets anchored.
+model VerificationRecord {
+  id            String @id @default(cuid())
+  goalId        String
+  goal          Goal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  walletAddress String
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  milestoneId String?
+  milestone   Milestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+
+  // 1-1 with the check-in it verifies (a check-in has at most one verification).
+  checkInId String?  @unique
+  checkIn   CheckIn? @relation(fields: [checkInId], references: [id], onDelete: SetNull)
+
+  status          VerificationStatus @default(PENDING)
+  plausibility    SignalLevel?
+  evidenceQuality SignalLevel?
+  consistency     SignalLevel?
+  confidence      Int                @default(0) // 0-100
+
+  reasoning        String // must be honest and non-accusatory
+  evidenceSummary  String?
+  evidenceHash     String? // representative hash shown in UI
+  verificationHash String // canonical §6.5 hash (eligible to be anchored)
+  modelVersion     String?
+  anchoredTxHash   String? // set only once actually broadcast
+
+  submittedAt DateTime @default(now())
+
+  @@index([walletAddress])
+  @@index([goalId])
+  @@index([milestoneId])
+}
+
+/// Off-chain index of an on-chain commitment (CommitmentVault.sol `Commitment`).
+/// The chain is the source of truth for money; this row is a cache/index.
+/// releaseCondition + failurePath MUST both be shown to the user before they
+/// sign (§3). Reward (demo-data.ts `Reward`) is a VIEW over the reward leg here
+/// — APPROVED+not-withdrawn => claimable, rewardWithdrawn => claimed — not a
+/// separate balance table (see LIMITATIONS.md).
+model Commitment {
+  id            String @id @default(cuid())
+  goalId        String @unique
+  goal          Goal   @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  walletAddress String // the depositor's wallet (scoping)
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  onchainCommitmentId BigInt?
+
+  depositor    String // depositor address (== walletAddress for self-commitments)
+  rewardFunder String? // optional third-party reward funder
+
+  // uint256 wei amounts. Decimal(78,0) holds the full uint256 range (~1.16e77).
+  principalWei Decimal @default(0) @db.Decimal(78, 0)
+  rewardWei    Decimal @default(0) @db.Decimal(78, 0)
+  token        String  @default("BOT") // native tBOT on testnet
+
+  deadline            DateTime?
+  gracePeriodSeconds  Int              @default(0)
+  confidenceThreshold Int              @default(70)
+  status              CommitmentStatus @default(NONE)
+
+  rewardFunded       Boolean @default(false)
+  principalWithdrawn Boolean @default(false)
+  rewardWithdrawn    Boolean @default(false)
+
+  verificationHash   String?
+  attestedConfidence Int?
+
+  releaseCondition String // human-readable; shown pre-sign (§3)
+  failurePath      String // human-readable; shown pre-sign (§3)
+  txHash           String? // creation tx; null until broadcast
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  chainTxs ChainTransaction[]
+
+  @@index([walletAddress])
+  @@index([status])
+}
+
+/// Append-only log of computed accountability scores (§10). Written by the
+/// server only — there is deliberately NO client-writable score column anywhere;
+/// the score is always recomputed and logged here with its weighted breakdown.
+model AccountabilityScoreLog {
+  id            String @id @default(cuid())
+  walletAddress String
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  score      Int // 0-100
+  breakdown  Json // [{ label, value, weight }] — mirrors WalletProfile.scoreBreakdown
+  reason     String?
+  computedAt DateTime @default(now())
+
+  @@index([walletAddress, computedAt])
+}
+
+/// Audit trail of AI decisions / tool calls (§10). References evidence by id or
+/// hash via evidenceRef — NEVER stores raw evidence content here. type "ai"
+/// entries in demo-data.ts `ActivityEvent` are projected from this table.
+model DecisionLog {
+  id            String @id @default(cuid())
+  walletAddress String
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  goalId      String?
+  goal        Goal?   @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  // Soft references (audit context), intentionally not FKs so the log survives
+  // deletion of the referenced row:
+  milestoneId String?
+  checkInId   String?
+
+  toolName         String
+  action           String
+  decision         String
+  confidence       Int?
+  evidenceRef      String? // evidence id or contentHash — NEVER raw evidence (§10)
+  verificationHash String?
+  modelVersion     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([walletAddress, createdAt])
+  @@index([goalId])
+}
+
+/// Index of REAL broadcast transactions. A row exists only after a tx hash comes
+/// back from the chain (CLAUDE.md rule 1 — no invented hashes). type "chain"
+/// entries in demo-data.ts `ActivityEvent` are projected from this table.
+model ChainTransaction {
+  id            String @id @default(cuid())
+  walletAddress String
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  commitmentId String?
+  commitment   Commitment? @relation(fields: [commitmentId], references: [id], onDelete: SetNull)
+  goalId       String? // soft reference; kept even if goal row is removed
+
+  kind        ChainTxKind
+  txHash      String // real broadcast hash; globally unique
+  blockNumber BigInt?
+  title       String
+  detail      String?
+
+  createdAt DateTime @default(now())
+  goal      Goal?    @relation(fields: [goalId], references: [id])
+
+  @@unique([txHash])
+  @@index([walletAddress, createdAt])
+  @@index([commitmentId])
+}

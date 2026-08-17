@@ -3,11 +3,13 @@
 Honest record of what is **not** yet real in this repo, per `CLAUDE.md` rules 1 and 6.
 Each entry states what exists today, why, and what the production fix is.
 
-Current build-sequence position: **step 2 substantially complete** — `CommitmentVault.sol`
-plus a 42-test Foundry suite build and pass on a fresh clone (`git clone
---recurse-submodules` → `forge build` → `forge test`). The one outstanding piece of
-step 2 is the **live testnet deploy tx hash**, which needs a funded deployer key (see §2).
-Steps 3–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
+Current build-sequence position: **step 3 core complete** — the Prisma schema, the
+offline-generated initial migration, and the wallet-scoped data-access layer (unit tests
+passing; DB-gated integration tests present) are all in place; see §9. Applying the
+migration to a live Postgres and running the integration suite is gated on a reachable
+database (§8), not on any missing code. Step 2's one outstanding piece is still the **live
+testnet deploy tx hash**, which needs a funded deployer key (see §2). Steps 4–12 of
+`CommitAI-Build-Prompt.md` §14 are outstanding.
 
 ---
 
@@ -165,3 +167,81 @@ Not installed in this build environment (no root — installs are user-local to
   (a test double, clearly not a production code path); an end-to-end test runs against the
   live API only when the key is present.
 - **Funded testnet key** (step 8): see §2.
+
+## 9. Step 3 — Prisma schema, migration, and wallet-scoped data-access layer
+
+**Status:** real and verified offline. Applying it to a live Postgres is gated on §8, not
+on missing code.
+
+**What exists and is real:**
+
+- **Schema** — `apps/web/prisma/schema.prisma`: 11 models and 9 enums modelling the full
+  domain, real PostgreSQL. Enum names/order for `CommitmentStatus` mirror
+  `CommitmentVault.sol` so the indexer maps the on-chain `uint8` straight across.
+- **Migration** — `apps/web/prisma/migrations/20260817101901_init/`, generated with
+  `prisma migrate diff` (needs no running server), so the SQL artifact is real rather than
+  invented. `migration_lock.toml` pins `postgresql`.
+- **Client** — `@prisma/client` and the `prisma` CLI are both pinned to `6.19.3`; classic
+  `prisma-client-js` generator, default output (`node_modules/.prisma/client`).
+- **Repositories** — `apps/web/lib/db/repositories/{wallet,goals,checkins,evidence}.ts`,
+  surfaced through `apps/web/lib/db/index.ts` (the test-only `probe.ts` is deliberately not
+  re-exported).
+
+**Wallet-scoped isolation guarantee** (build-prompt §9/§10, exercised by the integration
+tests). Every user-owned query folds the authenticated `walletAddress` into its `where`
+clause, and there is no code path that returns or mutates another wallet's row:
+
+- Cross-wallet **read** → `null` / empty list. A caller cannot tell "not yours" apart from
+  "does not exist".
+- Cross-wallet **write** → either `updateMany` touches **0 rows** (the count is returned to
+  the caller), or the parent-ownership check throws `WalletScopeError` (`createCheckIn` /
+  `createEvidence` when the parent goal/check-in is not owned). At the API layer — the
+  route handlers of §4, **not yet built** — `WalletScopeError` is what maps to HTTP 403.
+- Deleting a `Wallet` cascades to every row it owns.
+
+**How the tests are gated when no DB is reachable** (this is the reference §8 points at):
+
+- **Unit tests always run, no DB required** — `lib/db/schemas.test.ts`, 14 tests over the
+  Zod boundary schemas. `pnpm --filter web test` → 14 passed.
+- **Integration tests are DB-gated** — `lib/db/repositories/repositories.integration.test.ts`,
+  6 tests proving the cross-wallet isolation above plus cascade delete. They sit behind
+  `probeDatabaseReady()` (races a `wallet.count()` against a 2 s timeout) and
+  `describe.skipIf`. With no database they skip cleanly and print a SKIPPED reason with
+  run instructions; the `prisma:error Can't reach database server` line that Prisma logs
+  during the probe is expected, not a test failure.
+- **To actually run the integration suite** (needs a live Postgres — see §8):
+
+  ```bash
+  docker compose up -d db                 # root docker-compose.yml
+  pnpm --filter web db:migrate            # prisma migrate deploy → applies 20260817101901_init
+  pnpm --filter web test                  # the 6 integration tests now run instead of skipping
+  ```
+
+**Deferred / honest boundaries** (CLAUDE.md rule 6 — the real interface exists now; the gap
+is recorded here, not silently cut):
+
+- **EVM address validation is format-only and lowercase-canonical.** `evmAddressSchema`
+  checks `0x` + 40 hex and lowercases; it does **not** verify an EIP-55 checksum, and there
+  is no signature/session binding yet. The schema comment says it "does not fake a
+  checksum." Real wallet ownership (SIWE session → authenticated wallet) and true
+  checksummed addresses arrive in **step 8**; `Wallet.address`'s "checksummed" doc-comment
+  describes that eventual state, not today's.
+- **`binaryTargets` defaults to `native`** (arm64 in this environment). A production host on
+  a different libc/arch must add its target to the `generator client` block and
+  re-generate. This is the reference the comment in `schema.prisma` points at.
+- **The schema is ahead of the repositories, by design.** All 11 models exist, but only
+  `Wallet` / `Goal` / `CheckIn` / `Evidence` have a repository this step.
+  `VerificationStrategy`, `Milestone`, `VerificationRecord`, `Commitment`,
+  `AccountabilityScoreLog`, `DecisionLog` and `ChainTransaction` get their data-access in the
+  steps that use them (verification 4–6, chain indexing 8). Modelling the whole domain now
+  is additive — so later steps need no schema-breaking migration over early data — not a
+  scope cut.
+- **Money-shape choices are additive too, not cuts:** wei as `Decimal(78, 0)` (the full
+  uint256 range), on-chain ids as `BigInt`, and Reward modelled as a _view_ over a
+  Commitment's reward leg (APPROVED + not-withdrawn ⇒ claimable) rather than a separate
+  balance table. The DB is an off-chain index; deleting a row never moves funds (CLAUDE.md
+  rule 2) — the contract's pull-payment model is the only path that moves value.
+
+**No write endpoints were added.** The repositories are internal data-access only; no
+`app/api/*/route.ts` handler or server mutation ships in this step, so §4's "do not add
+write endpoints before this [CSRF/origin defence] is in place" is honoured.

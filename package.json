@@ -8,6 +8,7 @@
     "start": "pnpm --filter web start",
     "lint": "pnpm --filter web lint",
     "typecheck": "pnpm --filter web typecheck",
+    "test": "pnpm --filter web test",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
