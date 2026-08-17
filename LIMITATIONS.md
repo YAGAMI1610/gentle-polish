@@ -3,8 +3,11 @@
 Honest record of what is **not** yet real in this repo, per `CLAUDE.md` rules 1 and 6.
 Each entry states what exists today, why, and what the production fix is.
 
-Current build-sequence position: **step 1 complete** (repo skeleton builds and runs).
-Steps 2–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
+Current build-sequence position: **step 2 substantially complete** — `CommitmentVault.sol`
+plus a 42-test Foundry suite build and pass on a fresh clone (`git clone
+--recurse-submodules` → `forge build` → `forge test`). The one outstanding piece of
+step 2 is the **live testnet deploy tx hash**, which needs a funded deployer key (see §2).
+Steps 3–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
 
 ---
 
@@ -29,25 +32,41 @@ Per build prompt §0 the requirement at this stage is _labelling_, not removal.
 bodies change — each already carries a `// TODO: fetch('/api/...')` marker and the
 exported signatures stay identical, so no component changes.
 
-## 2. No smart contract exists
+## 2. Smart contract: built and tested, live deploy tx hash still outstanding
 
-`contracts/` is not yet created. Every "on-chain" element on screen — transaction
-hashes, explorer links, locked amounts, commitment statuses — comes from
-`lib/demo-data.ts`.
+**Status:** contract + tests done and verified; the on-chain deployment is the one
+remaining piece, blocked only on a funded key.
 
-`explorerUrl()` in `hooks/useCommitAI.ts` builds URLs against
-`https://explorer.example-botchain.test/` — a deliberately non-resolving `.test`
-domain, so a placeholder link cannot be mistaken for a real explorer. The hashes it
-links are fixtures, and the `/commitments` and `/goals/[goalId]` screens label them
-"(placeholder)" and "This is a mock confirmation" in the visible copy.
+`contracts/src/CommitmentVault.sol` exists with the §8 function set, an
+attestor/pull-payment trust model, `ReentrancyGuard` on every fund mover, and a
+non-punitive `cancelCommitment` that returns 100% of principal to the depositor and any
+reward to its funder. `contracts/test/` has 42 tests (happy path, cancel, reentrancy with
+the guard proven to fire, unauthorized approve, double-claim, wrong-caller withdrawal,
+rejecting-recipient atomicity, plus fuzz). `forge build` is clean under `deny="warnings"`
+and all 42 pass on a fresh recursive clone.
 
-**No real transaction hash is claimed anywhere in this repo.** Per `CLAUDE.md` rule 1,
-none will be until one actually exists on testnet.
+**What is NOT yet real:** no transaction has been broadcast to BOT Chain testnet, so there
+is **no real tx hash to record in `README.md` yet**. Per `CLAUDE.md` rule 1, none will be
+invented — the README will get a real hash only once `script/Deploy.s.sol` has actually
+run against the testnet.
 
-**Production fix:** build sequence step 2 — `CommitmentVault.sol` with the §8 function
-set, a full `forge test` suite, and a real testnet deployment whose tx hash goes in
-`README.md`. BOT Chain RPC URL, chain ID and explorer URL must be **fetched from
-official docs at build time** (§1 forbids recalling them from memory).
+The frontend still therefore shows placeholder chain data (see §1). `explorerUrl()` still
+points at the non-resolving `.test` domain. No real hash is claimed anywhere.
+
+**To complete this (needs a funded key — deliberately not requested in-transcript):**
+The deployer key never has to touch this transcript. From a local checkout:
+
+```bash
+cd contracts
+cp .env.example .env            # then edit .env:
+#   PRIVATE_KEY=<your funded testnet key>   (get tBOT: https://faucet.botchain.ai/basic)
+#   INITIAL_ATTESTOR=<backend attestor address>
+forge script script/Deploy.s.sol:Deploy --rpc-url botchain_testnet --broadcast -vvvv
+```
+
+The broadcast prints the deployed address + tx hash; those go into `README.md` and the
+frontend/`contractClient` config. BOT Chain testnet params are live-verified in
+`.env.example` (chain id 968, RPC `https://rpc.bohr.life`).
 
 ## 3. No wallet connection
 
@@ -132,6 +151,17 @@ works. Use `--webpack` when building inside this sandbox.
 
 ## 8. Tooling absent for later build-sequence steps
 
-Not yet installed in this environment: `forge` (step 2), `psql`/`docker` (step 3).
-These must be installed before the steps that need them — note that this environment
-has no root, so installs are user-local (`~/.local/`).
+Not installed in this build environment (no root — installs are user-local to
+`~/.local/`): `forge` was installed for step 2. Still to arrange for steps 3–8:
+
+- **PostgreSQL** (step 3): no `psql`/`docker` and no root. The schema is real Postgres and
+  the initial migration SQL is generated with `prisma migrate diff` (needs no server), so
+  the migration artifact is real. Applying it and running repository tests needs a live
+  Postgres — set up either via the committed `docker-compose.yml`, a user-local Postgres, or
+  a managed instance; `DATABASE_URL` is a `.env` placeholder. See the step-3 entry for how
+  repository tests are gated when no DB is reachable.
+- **Gemini API key** (steps 4–6): the `GeminiProvider` is real; live calls need
+  `GEMINI_API_KEY`. Provider/tool logic is tested with an explicit in-test fake transport
+  (a test double, clearly not a production code path); an end-to-end test runs against the
+  live API only when the key is present.
+- **Funded testnet key** (step 8): see §2.
