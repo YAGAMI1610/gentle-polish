@@ -1,0 +1,39 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+solc_version = "0.8.28"
+optimizer = true
+optimizer_runs = 200
+# This contract holds user funds. Treat any compiler warning as a build failure
+# rather than letting one scroll past in CI output. The two `block.timestamp`
+# lints this trips are suppressed individually, at the line, with a written
+# justification — so a *new* warning still breaks the build.
+deny = "warnings"
+
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "forge-std/=lib/forge-std/src/",
+]
+
+[profile.default.fuzz]
+runs = 512
+
+[profile.default.invariant]
+runs = 256
+depth = 32
+
+# BOT Chain endpoints. Values sourced from the official developer docs on
+# 2026-08-16 — see `.env.example` for the exact pages and the live verification.
+# Testnet only: mainnet is out of scope per build prompt section 1, and is
+# deliberately absent here so a deploy cannot be aimed at it by accident.
+[rpc_endpoints]
+botchain_testnet = "${BOTCHAIN_TESTNET_RPC_URL}"
+
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = false
+int_types = "long"

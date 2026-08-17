@@ -30,7 +30,9 @@ next-env.d.ts
 contracts/out/
 contracts/cache/
 contracts/broadcast/
-contracts/lib/
+# NOTE: contracts/lib/ is NOT ignored — dependencies (openzeppelin-contracts,
+# forge-std) are tracked as pinned git submodules (see .gitmodules + foundry.lock).
+# A fresh clone must run: git submodule update --init --recursive
 
 # Wrangler / Cloudflare
 .wrangler/
