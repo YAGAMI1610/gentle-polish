@@ -25,16 +25,29 @@ npm run dev
 
 ## On-chain deployment (BOT Chain testnet)
 
-The `CommitmentVault` contract (`contracts/src/CommitmentVault.sol`) is built and
-tested (`forge test`), and the backend contract client (`apps/web/lib/chain/`) talks
-to BOT Chain testnet — a live read of the chain id returns **968** even before a
-contract is deployed. What is **not** yet done is the actual testnet deploy: no
-transaction has been broadcast, so there is no real tx hash to record. Per
-`CLAUDE.md` rule 1, none is invented here — the placeholders below stay empty until a
-real `forge script` broadcast fills them in.
+The `CommitmentVault` contract (`contracts/src/CommitmentVault.sol`) is built,
+tested (`forge test`), and **deployed to BOT Chain testnet**. The backend contract
+client (`apps/web/lib/chain/`) reads it live — the values below are the real,
+on-chain record of that deployment (verified against the block explorer, not
+invented per `CLAUDE.md` rule 1):
 
-**Deploy it yourself (needs a funded testnet key — never paste a key into an agent
-transcript).** From a local checkout:
+| What                    | Value                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| Network                 | BOT Chain testnet (chain id `968`, RPC `https://rpc.bohr.life`)                |
+| CommitmentVault address | `0x0076c4269be298429af7827a2a5cc40a65f8f8a8`                                   |
+| Deploy tx hash          | `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`           |
+| Explorer (tx)           | https://scan.bohr.life/tx/0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4 |
+| Explorer (contract)     | https://scan.bohr.life/address/0x0076c4269be298429af7827a2a5cc40a65f8f8a8      |
+
+> **Testnet trust setup:** on this deployment the contract `owner`, the `attestor`,
+> and the deployer are the **same** address (`0xae5c…7607`). This is money-safe — the
+> contract lets neither `owner` nor `attestor` move a depositor's funds (every
+> transfer is depositor-signed and pull-based; see `contractClient.safety.test.ts` and
+> LIMITATIONS §2/§14) — but for production these roles should be **separated** and the
+> attestor key rotated. See LIMITATIONS §2.
+
+**Deploy your own instance (needs a funded testnet key — never paste a key into an
+agent transcript).** From a local checkout:
 
 ```sh
 cd contracts
@@ -45,15 +58,8 @@ cp .env.example .env
 forge script script/Deploy.s.sol:Deploy --rpc-url botchain_testnet --broadcast -vvvv
 ```
 
-The broadcast prints the deployed address and the deploy tx hash. Record them here
-and wire the address into the web app's environment:
-
-| What                    | Value                                                           |
-| ----------------------- | --------------------------------------------------------------- |
-| Network                 | BOT Chain testnet (chain id `968`, RPC `https://rpc.bohr.life`) |
-| CommitmentVault address | _(paste after deploy)_                                          |
-| Deploy tx hash          | _(paste after deploy)_                                          |
-| Explorer                | `https://scan.bohr.life/tx/<txHash>`                            |
+The broadcast prints the deployed address and the deploy tx hash. Record them in the
+table above and wire the address into the web app's environment:
 
 Then in `apps/web/.env` set `COMMITMENT_VAULT_ADDRESS` to the deployed address (and,
 for the backend to attest, `ATTESTOR_PRIVATE_KEY` — a key that per the contract can

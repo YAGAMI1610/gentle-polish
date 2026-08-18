@@ -16,9 +16,11 @@ the SDK-agnostic `AIProvider` boundary, the real `GeminiProvider`, the §7 promp
 guards, the `createGoal` tool end-to-end, and the bounded agentic runner), the wallet-scoped
 data layer (§9), the contract + tests (§2), and the frontend labelling (§1). Live model calls
 and the DB-gated handler tests are gated on a key / a reachable Postgres (§8), not on any
-missing code. The one thing still gated on a **funded key** is the **live testnet deploy and
-its real tx hash** — the deploy is run locally by the user (see §2 and §14); per rule 1 no hash
-is invented. Steps 9–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
+missing code. The **live testnet deploy is now done**: `CommitmentVault` is deployed at
+`0x0076c4269be298429af7827a2a5cc40a65f8f8a8` (deploy tx
+`0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`), recorded in `README.md`, and
+the live-gated vault read now runs against it and passes (see §2 and §14). Steps 9–12 of
+`CommitAI-Build-Prompt.md` §14 are outstanding.
 
 ---
 
@@ -43,10 +45,12 @@ Per build prompt §0 the requirement at this stage is _labelling_, not removal.
 bodies change — each already carries a `// TODO: fetch('/api/...')` marker and the
 exported signatures stay identical, so no component changes.
 
-## 2. Smart contract: built and tested, live deploy tx hash still outstanding
+## 2. Smart contract: built, tested, and deployed to BOT Chain testnet
 
-**Status:** contract + tests done and verified; the on-chain deployment is the one
-remaining piece, blocked only on a funded key.
+**Status:** contract + tests done and verified, and **deployed to BOT Chain testnet** —
+address `0x0076c4269be298429af7827a2a5cc40a65f8f8a8`, deploy tx
+`0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`, both recorded in
+`README.md`. Verified live: the backend client reads the deployed vault (see §14).
 
 `contracts/src/CommitmentVault.sol` exists with the §8 function set, an
 attestor/pull-payment trust model, `ReentrancyGuard` on every fund mover, and a
@@ -56,20 +60,34 @@ the guard proven to fire, unauthorized approve, double-claim, wrong-caller withd
 rejecting-recipient atomicity, plus fuzz). `forge build` is clean under `deny="warnings"`
 and all 42 pass on a fresh recursive clone.
 
-**What is NOT yet real:** no transaction has been broadcast to BOT Chain testnet, so there
-is **no real tx hash to record in `README.md` yet**. Per `CLAUDE.md` rule 1, none will be
-invented — the README will get a real hash only once `script/Deploy.s.sol` has actually
-run against the testnet.
+**The deployment (real, verified against the explorer — `CLAUDE.md` rule 1):**
+`CommitmentVault` is live at `0x0076c4269be298429af7827a2a5cc40a65f8f8a8`, created in the
+transaction `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4` (block
+20252821, deployer `0xae5c7bC4Cb9f54F7cf29fA988bb6E9010dD57607`). Explorer:
+`https://scan.bohr.life/address/0x0076c4269be298429af7827a2a5cc40a65f8f8a8`. On-chain state
+matches the source: `MAX_GRACE_PERIOD` reads `15552000` (180 days), `nextGoalId` /
+`nextCommitmentId` are `1` (fresh), and the backend `contractClient` reads it live (the
+integration test's vault-read now runs instead of skipping).
 
-The frontend still therefore shows placeholder chain data (see §1); wiring the deployed
-address into the app UI is part of step 9. The explorer helpers now resolve to
-`https://scan.bohr.life` — the non-resolving `.test` domain noted here previously is fixed in
-`lib/chain/botchain.ts` (`explorerTxUrl` / `explorerAddressUrl`). No real hash is claimed
-anywhere. The backend contract client that will consume the deployed address is itself built
-and tested now, and its live chain reads already work — see §14.
+**Production caveat — separation of duties (opsec, not a fund-safety hole):** on this
+testnet deployment the `owner`, the `attestor`, and the deployer are the **same** account
+(`0xae5c…7607`). It is money-safe: neither `owner` nor `attestor` has any code path to move a
+depositor's funds — the contract makes every transfer depositor-signed and pull-based
+(invariant proved in `contractClient.safety.test.ts` and the Foundry suite). But collapsing
+the three roles removes defence-in-depth. For production: use a distinct owner (ideally a
+multisig), a separate attestor key held only by the backend, and rotate the attestor key. The
+deployer/attestor key and the API keys shared during this build session appeared in chat and
+**must be rotated** before any non-throwaway use.
 
-**To complete this (needs a funded key — deliberately not requested in-transcript):**
-The deployer key never has to touch this transcript. From a local checkout:
+The frontend still shows placeholder chain data (see §1); wiring the deployed address into the
+app UI is part of step 9. The explorer helpers resolve to `https://scan.bohr.life` — the
+non-resolving `.test` domain noted here previously is fixed in `lib/chain/botchain.ts`
+(`explorerTxUrl` / `explorerAddressUrl`). The tx hash recorded above is real and
+explorer-verified (rule 1). The backend contract client that consumes the deployed address is
+itself built and tested, and its live chain reads work — see §14.
+
+**How to (re)deploy your own instance (needs a funded key — never paste one in-transcript):**
+From a local checkout:
 
 ```bash
 cd contracts
@@ -449,8 +467,9 @@ and cross-wallet attaches throw `WalletScopeError`.
 typecheck`, `pnpm --filter web lint`, and `pnpm format:check` are clean; the always-on chain tests
 pass; the live-gated integration test performs a REAL `getChainId()` read that returns **968**
 (proving the client talks to BOT Chain testnet); the DB-gated and deploy-gated tests skip cleanly
-with printed instructions (§8). The one piece needing a funded key — the testnet **deploy + its real
-tx hash** — is the user's local step (see §2); per rule 1 no hash is invented.
+with printed instructions (§8). The testnet **deploy is now done** (§2): with
+`COMMITMENT_VAULT_ADDRESS` set to the deployed vault, the contract-read half of the integration
+test runs against `0x0076…f8a8` and passes (a value-neutral status read); no hash was invented.
 
 **What exists and is real:**
 
@@ -489,10 +508,11 @@ broadcast hash.
 
 **Honest deferrals (rules 1, 3 & 6):**
 
-- **Live deploy + real tx hash is the user's local, funded step.** Live _reads_ work now; the
-  contract-read half of `contractClient.integration.test.ts` stays skipped (with a printed
-  instruction) until `COMMITMENT_VAULT_ADDRESS` points at a deployed vault. Deploy commands and the
-  empty address/hash placeholders are in `README.md` → "On-chain deployment" and §2.
+- **Live deploy is done (§2) — no longer deferred.** `CommitmentVault` is deployed at
+  `0x0076c4269be298429af7827a2a5cc40a65f8f8a8` (deploy tx
+  `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`, recorded in `README.md`).
+  With `COMMITMENT_VAULT_ADDRESS` set, the contract-read half of
+  `contractClient.integration.test.ts` runs against the deployed vault and passes.
 - **`createCommitment` / `claimReward` are prepare-only pending the step-9 wallet.** The contract
   requires the depositor's own `msg.sender`, so these (and `registerGoal` / `lockFunds` /
   `fundReward` / `releasePrincipal` / `cancelCommitment`) are returned as calldata for the user to
