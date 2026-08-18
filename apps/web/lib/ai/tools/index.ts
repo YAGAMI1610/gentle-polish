@@ -14,4 +14,8 @@ export * from "./evaluateAnswers";
 export * from "./analyzeEvidence";
 export * from "./runRealityCheck";
 export * from "./calculateVerificationConfidence";
+export * from "./createCommitment";
+export * from "./claimReward";
+export * from "./requestCompletion";
+export * from "./anchorMilestone";
 export * from "./registry";

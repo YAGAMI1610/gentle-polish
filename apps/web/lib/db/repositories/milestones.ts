@@ -76,3 +76,30 @@ export async function setMilestoneDone(
   });
   return result.count;
 }
+
+/**
+ * Record the on-chain anchor of a milestone after a REAL `registerMilestone`
+ * broadcast (build step 8): its bytes32 `milestoneRef`, the anchored
+ * `verificationHash`, and the attested `onchainConfidence`. Scoped through the
+ * goal relation, so a cross-wallet call updates zero rows. Returns rows changed
+ * (0 if not owned / not found). Writes no funds and no key — the values come from
+ * a broadcast the attestor already made; per rule 1 this is only called with a
+ * real result, never to pre-populate an anchor that hasn't happened.
+ */
+export async function setMilestoneAnchor(
+  walletAddress: string,
+  goalId: string,
+  milestoneId: string,
+  anchor: { milestoneRef: string; verificationHash: string; onchainConfidence: number },
+): Promise<number> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  const result = await prisma.milestone.updateMany({
+    where: { id: milestoneId, goalId, goal: { walletAddress: addr } },
+    data: {
+      milestoneRef: anchor.milestoneRef,
+      verificationHash: anchor.verificationHash,
+      onchainConfidence: anchor.onchainConfidence,
+    },
+  });
+  return result.count;
+}

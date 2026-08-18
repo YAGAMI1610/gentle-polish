@@ -97,3 +97,22 @@ export async function getLatestVerification(
     orderBy: { submittedAt: "desc" },
   });
 }
+
+/**
+ * Stamp a verification record with the hash of the REAL transaction that anchored
+ * it on-chain (build step 8). Wallet-scoped; returns rows changed (0 if not owned
+ * / not found). Per rule 1 this is only ever called with a hash a broadcast
+ * actually returned — `anchoredTxHash` is null until then, never a placeholder.
+ */
+export async function setVerificationAnchor(
+  walletAddress: string,
+  verificationRecordId: string,
+  anchoredTxHash: string,
+): Promise<number> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  const result = await prisma.verificationRecord.updateMany({
+    where: { id: verificationRecordId, walletAddress: addr },
+    data: { anchoredTxHash },
+  });
+  return result.count;
+}

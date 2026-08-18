@@ -7,6 +7,7 @@ import {
   EvidenceType,
   SignalLevel,
   VerificationStatus,
+  ChainTxKind,
 } from "@prisma/client";
 
 /**
@@ -46,6 +47,34 @@ export const sha256HexSchema = z
   .trim()
   .regex(/^[0-9a-f]{64}$/i, "must be a 64-character hex sha256 digest")
   .transform((value) => value.toLowerCase());
+
+/**
+ * An Ethereum transaction hash: 0x + 32 bytes (64 hex). Used to index REAL
+ * broadcast transactions (`ChainTransaction`). This is a strict format guard —
+ * per CLAUDE.md rule 1 a hash is only ever recorded after a real broadcast
+ * returns one, never invented — so the shape must be a genuine 32-byte hash.
+ */
+export const txHashSchema = z
+  .string()
+  .trim()
+  .regex(/^0x[0-9a-fA-F]{64}$/, "must be a 0x-prefixed 32-byte transaction hash")
+  .transform((value) => value.toLowerCase());
+
+/** Max uint256 — the on-chain range a wei amount must fit within. */
+const MAX_UINT256 = 2n ** 256n - 1n;
+
+/**
+ * A wei amount as a base-10 integer string. Kept as a string (never a JS number)
+ * because uint256 far exceeds `Number.MAX_SAFE_INTEGER`; the value is bounded to
+ * the real uint256 range so a prepared transaction can never encode an amount the
+ * contract couldn't hold. Stored into `Decimal(78,0)` columns and parsed to a
+ * `bigint` for calldata encoding.
+ */
+export const weiSchema = z
+  .string()
+  .trim()
+  .regex(/^\d+$/, "must be a base-10 wei amount (digits only)")
+  .refine((value) => BigInt(value) <= MAX_UINT256, "exceeds the uint256 range");
 
 /** Opaque row id (Prisma cuid). Kept loose — just a non-empty bounded string. */
 const idSchema = z.string().min(1).max(64);
@@ -278,3 +307,49 @@ export const storeEvidenceInput = z.object({
   fileName: z.string().trim().max(512).optional(),
 });
 export type StoreEvidenceInput = z.input<typeof storeEvidenceInput>;
+
+// ===========================================================================
+// Build step 8 — chain-tx indexer
+// ===========================================================================
+
+/**
+ * A REAL broadcast transaction to index (build-prompt §14.8, schema
+ * `ChainTransaction`). Per CLAUDE.md rule 1 this is only ever written after a
+ * broadcast returns a hash — never for a prepared-but-unsigned action — so
+ * `txHash` is required and strictly shaped. `commitmentId`/`goalId`, when given,
+ * are checked for wallet ownership in the repository. `blockNumber` is optional
+ * because it is only known once the tx is mined (a later, idempotent update).
+ */
+export const recordChainTxInput = z.object({
+  kind: z.nativeEnum(ChainTxKind),
+  txHash: txHashSchema,
+  commitmentId: idSchema.optional(),
+  goalId: idSchema.optional(),
+  blockNumber: z.bigint().nonnegative().optional(),
+  title: z.string().trim().min(1).max(200),
+  detail: z.string().trim().max(2000).optional(),
+});
+export type RecordChainTxInput = z.input<typeof recordChainTxInput>;
+
+/**
+ * Terms for a DRAFT commitment (build-prompt §3, §14.8). This writes an OFF-CHAIN
+ * index row of intended terms so the user can review `releaseCondition` /
+ * `failurePath` before they sign; it is NOT an on-chain action. Per CLAUDE.md
+ * rule 1 the draft carries no `onchainCommitmentId` and no `txHash` — those are
+ * filled only after the depositor's own wallet broadcasts `createCommitment`
+ * (step 9). Amounts are wei strings (full uint256 precision).
+ */
+export const createDraftCommitmentInput = z.object({
+  goalId: idSchema,
+  principalWei: weiSchema,
+  rewardWei: weiSchema.default("0"),
+  deadline: z.coerce.date().optional(),
+  // Duration in seconds; bounded to a sane 10-year ceiling (the contract enforces
+  // its own MAX_GRACE_PERIOD — a larger value simply reverts on-chain, honestly).
+  gracePeriodSeconds: z.number().int().min(0).max(315_360_000).default(0),
+  confidenceThreshold: z.number().int().min(1).max(100).default(70),
+  // Both are shown to the user PRE-SIGN (§3); required, human-readable.
+  releaseCondition: z.string().trim().min(1).max(2000),
+  failurePath: z.string().trim().min(1).max(2000),
+});
+export type CreateDraftCommitmentInput = z.input<typeof createDraftCommitmentInput>;

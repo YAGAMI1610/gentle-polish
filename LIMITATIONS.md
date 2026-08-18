@@ -3,18 +3,22 @@
 Honest record of what is **not** yet real in this repo, per `CLAUDE.md` rules 1 and 6.
 Each entry states what exists today, why, and what the production fix is.
 
-Current build-sequence position: **steps 5–7 complete** — the remaining §4 agent tools
-(§11) and the §6 verification engines + their tools (§12) are in place, typechecked and
-unit-tested. This builds on **step 4** (§10, the SDK-agnostic `AIProvider` boundary, the real
-`GeminiProvider`, the §7 prompt-injection guards, the `createGoal` tool end-to-end, and the
-bounded agentic runner). Steps 1–3 stand as recorded: the wallet-scoped data layer (§9), the
-contract + tests (§2), and the frontend labelling (§1). Live model calls and the DB-gated
-handler tests are gated on a key / a reachable Postgres (§8), not on any missing code. Two
-things are still deliberately deferred and recorded honestly: the **fund/chain tools**
-(`createCommitment`, `claimReward`, on-chain `requestCompletion`) and the **live testnet deploy
-tx hash** both belong to **step 8** and need a funded key / the contract client (see §2, §12).
-The **evidence upload/storage** pipeline (step 7) is now real and recorded in §13.
-Steps 8–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
+Current build-sequence position: **steps 5–8 complete (code)** — step 8 adds the viem
+`CommitmentVault` client (`apps/web/lib/chain/`), the `ChainTransaction` indexer
+(`repositories/chainTx.ts`), and the chain-aware tools registered safely
+(`createCommitment` / `claimReward` are **prepare-only**; `requestCompletion` /
+`anchorMilestone` are **value-neutral attestor** calls), all typechecked and tested.
+Live chain _reads_ already work: a real `getChainId()` against the testnet RPC returns
+**968** (asserted by `contractClient.integration.test.ts`). This builds on steps 5–7 —
+the remaining §4 agent tools (§11), the §6 verification engines + their tools (§12), and
+the real evidence upload/storage pipeline (§13). Steps 1–4 stand as recorded: step 4 (§10,
+the SDK-agnostic `AIProvider` boundary, the real `GeminiProvider`, the §7 prompt-injection
+guards, the `createGoal` tool end-to-end, and the bounded agentic runner), the wallet-scoped
+data layer (§9), the contract + tests (§2), and the frontend labelling (§1). Live model calls
+and the DB-gated handler tests are gated on a key / a reachable Postgres (§8), not on any
+missing code. The one thing still gated on a **funded key** is the **live testnet deploy and
+its real tx hash** — the deploy is run locally by the user (see §2 and §14); per rule 1 no hash
+is invented. Steps 9–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
 
 ---
 
@@ -57,8 +61,12 @@ is **no real tx hash to record in `README.md` yet**. Per `CLAUDE.md` rule 1, non
 invented — the README will get a real hash only once `script/Deploy.s.sol` has actually
 run against the testnet.
 
-The frontend still therefore shows placeholder chain data (see §1). `explorerUrl()` still
-points at the non-resolving `.test` domain. No real hash is claimed anywhere.
+The frontend still therefore shows placeholder chain data (see §1); wiring the deployed
+address into the app UI is part of step 9. The explorer helpers now resolve to
+`https://scan.bohr.life` — the non-resolving `.test` domain noted here previously is fixed in
+`lib/chain/botchain.ts` (`explorerTxUrl` / `explorerAddressUrl`). No real hash is claimed
+anywhere. The backend contract client that will consume the deployed address is itself built
+and tested now, and its live chain reads already work — see §14.
 
 **To complete this (needs a funded key — deliberately not requested in-transcript):**
 The deployer key never has to touch this transcript. From a local checkout:
@@ -235,13 +243,14 @@ is recorded here, not silently cut):
 - **`binaryTargets` defaults to `native`** (arm64 in this environment). A production host on
   a different libc/arch must add its target to the `generator client` block and
   re-generate. This is the reference the comment in `schema.prisma` points at.
-- **The schema is ahead of the repositories, by design.** As of steps 5–6, ten of the
-  eleven models have a wallet-scoped repository: `Wallet` / `Goal` / `CheckIn` / `Evidence`
-  (step 3), `DecisionLog` (step 4), and `Milestone` / `VerificationStrategy` /
-  `VerificationRecord` / `Commitment` (read-only) / `AccountabilityScoreLog` (steps 5–6).
-  Only `ChainTransaction` still awaits its data-access, which lands with the chain indexer in
-  **step 8**. Modelling the whole domain up front is additive — later steps need no
-  schema-breaking migration over early data — not a scope cut.
+- **Every model now has a wallet-scoped repository.** As of step 8 all eleven do: `Wallet` /
+  `Goal` / `CheckIn` / `Evidence` (step 3), `DecisionLog` (step 4), `Milestone` /
+  `VerificationStrategy` / `VerificationRecord` / `Commitment` / `AccountabilityScoreLog`
+  (steps 5–6), and `ChainTransaction` (step 8 — the chain indexer, see §14). `Commitment` also
+  gained a **prepare-only** `createDraftCommitment` writer in step 8: it persists off-chain
+  terms for pre-sign review only, with `onchainCommitmentId` / `txHash` staying null until a
+  real broadcast is indexed (rule 1). Modelling the whole domain up front was additive — later
+  steps needed no schema-breaking migration over early data — not a scope cut.
 - **Money-shape choices are additive too, not cuts:** wei as `Decimal(78, 0)` (the full
   uint256 range), on-chain ids as `BigInt`, and Reward modelled as a _view_ over a
   Commitment's reward leg (APPROVED + not-withdrawn ⇒ claimable) rather than a separate
@@ -375,10 +384,13 @@ claim of dishonesty and never uses accusatory vocabulary; asserted by a regex in
 
 **Honest deferrals (rules 1, 3 & 6):**
 
-- **No completion/fund side effect exists this pass.** `requestCompletion`, `createCommitment`,
-  and `claimReward` are **not registered** — verified in `antiInjection.test.ts`. `analyzeEvidence`
-  writes a `VerificationRecord` with the canonical hash but triggers **no** money path. Anchoring
-  that hash on-chain and any settlement are **step 8** (the contract enforces; the AI proposes).
+- **Completion/fund tools arrived in step 8 — and still move no funds.** At step 6 these were
+  deliberately not registered; **step 8** registered `requestCompletion` / `createCommitment` /
+  `claimReward` (and `anchorMilestone`) _safely_: the fund-relevant ones are prepare-only and
+  the attestor calls are value-neutral (see §14, proved architecturally in
+  `contractClient.safety.test.ts`). `antiInjection.test.ts` was updated to assert that
+  registered-but-money-safe property rather than their absence. `analyzeEvidence` writes a
+  `VerificationRecord` with the canonical hash but still triggers **no** money path itself.
 - **Signal extraction is intentionally shallow today.** `evaluateAnswers` uses a deterministic
   generic-answer check (it never produces a HIGH signal from free text, and never a verdict);
   richer extraction (NLP over answers, EXIF/tracker/transaction parsing to auto-derive
@@ -430,3 +442,81 @@ and cross-wallet attaches throw `WalletScopeError`.
 - **Content hardening is deferred.** MIME is checked against an allowlist and total size is capped
   (`MAX_EVIDENCE_BYTES`), but deep content-sniffing, virus scanning, and EXIF/metadata scrubbing are
   production follow-ups (step 9 / hardening), noted here rather than silently skipped.
+
+## 14. Step 8 — contract client (viem), chain-tx indexer, and chain-aware tools
+
+**Status:** real and verified offline, and live chain _reads_ already work. `pnpm --filter web
+typecheck`, `pnpm --filter web lint`, and `pnpm format:check` are clean; the always-on chain tests
+pass; the live-gated integration test performs a REAL `getChainId()` read that returns **968**
+(proving the client talks to BOT Chain testnet); the DB-gated and deploy-gated tests skip cleanly
+with printed instructions (§8). The one piece needing a funded key — the testnet **deploy + its real
+tx hash** — is the user's local step (see §2); per rule 1 no hash is invented.
+
+**What exists and is real:**
+
+- **`apps/web/lib/chain/`** — `abi.ts` (the `CommitmentVault` ABI, hand-transcribed from
+  `contracts/src/CommitmentVault.sol` and parsed with viem `parseAbi`; the enum
+  `COMMITMENT_STATUS` mirrors the Solidity order), `botchain.ts` (the BOT Chain testnet viem chain,
+  id 968, plus `explorerTxUrl` / `explorerAddressUrl`), `config.ts` (env parsing with honest
+  not-configured semantics), and `contractClient.ts` — the ONLY place backend code talks to the
+  chain. It has view-only reads (`readCommitment`, `readGoal`, `readMilestones`, …), the attestor
+  client, and the `prepare*` calldata encoders.
+- **`apps/web/lib/db/repositories/chainTx.ts`** — the `ChainTransaction` indexer. A row is a
+  **receipt**, written by `recordChainTx` only after a real broadcast returned a hash (rule 1);
+  it is idempotent on the globally-unique `txHash` (a re-record fills in the block number once
+  mined) and strictly wallet-scoped (another wallet can neither see nor rebind a hash).
+- **Chain-aware tools** (registered in `registry.ts`): `requestCompletion` and `anchorMilestone`
+  make **real, value-neutral** attestor calls when configured (they only transition state /
+  anchor a hash — no funds move) and write a `ChainTransaction` receipt after broadcast;
+  `createCommitment` and `claimReward` are **prepare-only** (they return unsigned calldata for the
+  user's own wallet); `getCommitmentStatus` was extended with a best-effort live on-chain status
+  read when configured.
+
+**Money-safety guarantee — architectural, not merely avoided (CLAUDE.md rules 2–3):** the backend
+holds only the attestor key, and `getAttestorClient()` returns a **frozen** object exposing
+**exactly four** value-neutral methods — `registerMilestone`, `requestCompletion`,
+`approveCompletion`, `setAttestor`. There is no `lockFunds` / `fundReward` / `releasePrincipal` /
+`claimReward` / `createCommitment` / `cancelCommitment` method anywhere on it, so the backend key
+literally cannot move a depositor's funds. Every value-moving action is instead a pure `prepare*`
+encoder returning calldata for the DEPOSITOR's own wallet to sign in step 9, with `value` non-zero
+only for the depositor's own `lockFunds` / `fundReward`. This shape is asserted in
+`contractClient.safety.test.ts` so it cannot silently regress.
+
+**No fakes (rule 1):** with no deployed contract (`COMMITMENT_VAULT_ADDRESS` unset) every write/read
+path reports an honest "not configured" instead of a fabricated address or tx; the attestor client
+throws "attestor not configured" without a key. No `ChainTransaction` row exists without a real
+broadcast hash.
+
+**Honest deferrals (rules 1, 3 & 6):**
+
+- **Live deploy + real tx hash is the user's local, funded step.** Live _reads_ work now; the
+  contract-read half of `contractClient.integration.test.ts` stays skipped (with a printed
+  instruction) until `COMMITMENT_VAULT_ADDRESS` points at a deployed vault. Deploy commands and the
+  empty address/hash placeholders are in `README.md` → "On-chain deployment" and §2.
+- **`createCommitment` / `claimReward` are prepare-only pending the step-9 wallet.** The contract
+  requires the depositor's own `msg.sender`, so these (and `registerGoal` / `lockFunds` /
+  `fundReward` / `releasePrincipal` / `cancelCommitment`) are returned as calldata for the user to
+  sign — the backend has no signer for them. The step-9 wallet-connect UI is what will broadcast
+  them.
+- **The ABI is hand-transcribed** (no compiled Foundry artifact ships in the web package). To make
+  drift from the Solidity source fail locally rather than on-chain, `abi.test.ts` recomputes every
+  checked selector from its canonical signature and round-trips `encode`→`decode`.
+- **No historical event backfill / sync loop yet.** `recordChainTx` indexes a transaction at the
+  moment the backend broadcasts it; reconstructing state by replaying past chain events is future
+  work (it belongs with the step-9 read path), noted here rather than silently omitted.
+
+**How the tests are gated:**
+
+- **Always run, no key / DB / network** — `abi.test.ts`, `botchain.test.ts`, `config.test.ts`, and
+  `contractClient.safety.test.ts` (the money-safety proof), plus the schema/params + always-on
+  unconfigured cases of the tool tests.
+- **Live-gated** — `contractClient.integration.test.ts` dials the RPC; when reachable it asserts the
+  real chain id is 968, and the deployed-vault read runs once `COMMITMENT_VAULT_ADDRESS` is set.
+- **DB-gated** — the handler tests for `createCommitment` / `claimReward` / `requestCompletion` and
+  the `chainTx` indexer tests write real rows and skip cleanly without a Postgres (§8). None of them
+  broadcast: the `requestCompletion` DB test proves the honest no-commitment early-out records no
+  receipt.
+
+**No write endpoints were added.** The chain client and indexer are internal library code; no
+`app/api/*` route handler ships here, so §4's rule (no write endpoints before CSRF/origin defence +
+SIWE) is still honoured. The AI holds no key and has no fund-moving path (rule 3).

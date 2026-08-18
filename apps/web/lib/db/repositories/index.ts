@@ -8,3 +8,4 @@ export * from "./strategy";
 export * from "./verificationRecords";
 export * from "./commitments";
 export * from "./scores";
+export * from "./chainTx";

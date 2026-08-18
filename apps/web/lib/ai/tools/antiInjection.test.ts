@@ -17,9 +17,13 @@ import { getTool, toolSpecs } from "./registry";
  *      in a TEXT claim, which is pinned to LOW, and the engine never verifies on
  *      LOW evidence — no matter how high the other (model-supplied) signals are.
  *   2. The reasoning the user sees is never accusatory.
- *   3. There is NO registered tool capable of completing a goal or moving funds
- *      this pass (`requestCompletion`, `createCommitment`, `claimReward` are all
- *      deferred to build step 8), so even a "verified" verdict has no fund effect.
+ *   3. Even now that build step 8 has registered the chain-aware tools, NONE of them
+ *      give the AI a path to move funds: `createCommitment`/`claimReward` are
+ *      prepare-only (unsigned calldata for the user's own wallet — the backend holds
+ *      no key to broadcast it) and `requestCompletion` is a value-neutral attestor
+ *      call. So even a "verified" verdict driven by injected text has no fund effect.
+ *      (The architectural proof of the attestor's capability set is in
+ *      `contractClient.safety.test.ts`.)
  */
 
 const ACCUSATORY =
@@ -74,17 +78,30 @@ describe("verification is injection-proof (pure, always-on)", () => {
     expect(detectGenericAnswer("I did it")).toBe(true);
   });
 
-  it("registers NO tool that can complete a goal or move funds this pass", () => {
-    // Build step 8 (contract client) owns anything that touches real value.
-    expect(getTool("requestCompletion")).toBeUndefined();
-    expect(getTool("createCommitment")).toBeUndefined();
-    expect(getTool("claimReward")).toBeUndefined();
-
+  it("registers the step-8 tools, but none give the AI a way to move funds", () => {
+    // Build step 8 has landed, so these tools now ARE registered. The money-safety
+    // guarantee is therefore no longer "they don't exist" but "none can move value":
+    // createCommitment/claimReward are prepare-only (they return unsigned calldata for
+    // the user's own wallet; the backend holds no key to broadcast it), and
+    // requestCompletion is a value-neutral attestor call. contractClient.safety.test.ts
+    // proves the attestor's capability set architecturally; here we assert the
+    // advertised, model-facing contract.
     const names = toolSpecs().map((s) => s.name);
-    expect(names).not.toContain("requestCompletion");
-    expect(names).not.toContain("createCommitment");
-    expect(names).not.toContain("claimReward");
-    // The deterministic verification tools, by contrast, ARE registered.
+    for (const name of ["requestCompletion", "createCommitment", "claimReward"] as const) {
+      expect(getTool(name)).toBeDefined();
+      expect(names).toContain(name);
+    }
+
+    // The fund-relevant tools advertise themselves as prepare-only / never-moves-funds.
+    for (const name of ["createCommitment", "claimReward"] as const) {
+      const description = getTool(name)!.description.toLowerCase();
+      expect(description).toContain("do not send");
+      expect(description).toContain("never moves funds");
+    }
+    // requestCompletion broadcasts, but the contract makes the call value-neutral.
+    expect(getTool("requestCompletion")!.description.toLowerCase()).toContain("moves no funds");
+
+    // The deterministic verification tools, by contrast, are still registered.
     expect(getTool("analyzeEvidence")).toBeDefined();
     expect(getTool("runRealityCheck")).toBeDefined();
   });

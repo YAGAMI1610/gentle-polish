@@ -16,6 +16,12 @@ import { evaluateAnswersTool } from "./evaluateAnswers";
 import { analyzeEvidenceTool } from "./analyzeEvidence";
 import { runRealityCheckTool } from "./runRealityCheck";
 import { calculateVerificationConfidenceTool } from "./calculateVerificationConfidence";
+// Build step 8 — chain-aware tools (contract client). Attestor calls move no funds;
+// fund operations are PREPARED for the user's own wallet to sign, never broadcast here.
+import { createCommitmentTool } from "./createCommitment";
+import { claimRewardTool } from "./claimReward";
+import { requestCompletionTool } from "./requestCompletion";
+import { anchorMilestoneTool } from "./anchorMilestone";
 import type { AnyToolDefinition, ToolContext } from "./types";
 
 /**
@@ -27,10 +33,15 @@ import type { AnyToolDefinition, ToolContext } from "./types";
  * model produced it. Unknown tools and invalid arguments fail closed as an error
  * result rather than throwing — the runner feeds that back to the model.
  *
- * NOTE (money safety, CLAUDE.md rules 2–3): no fund-moving tool is registered.
- * `createCommitment`, `claimReward`, and the on-chain half of `requestCompletion`
- * are deliberately absent until the contract client (build step 8) so they make
- * REAL testnet transactions rather than inventing them — see LIMITATIONS.md.
+ * NOTE (money safety, CLAUDE.md rules 2–3): no tool can move a user's funds.
+ * The chain-aware tools split cleanly in two:
+ *   - `requestCompletion` / `anchorMilestone` are REAL on-chain calls the backend
+ *     attestor makes, and the contract permits the attestor ONLY value-neutral
+ *     actions (mark completion-requested, register a milestone) — never a transfer.
+ *   - `createCommitment` / `claimReward` are PREPARE-ONLY: they return encoded
+ *     calldata for the DEPOSITOR's own wallet to sign (step 9) and never broadcast.
+ * The backend holds no key that can move funds; the contract enforces it. See the
+ * dedicated `contractClient.safety.test.ts`.
  */
 
 const DEFINITIONS: readonly AnyToolDefinition[] = [
@@ -51,6 +62,11 @@ const DEFINITIONS: readonly AnyToolDefinition[] = [
   analyzeEvidenceTool,
   runRealityCheckTool,
   calculateVerificationConfidenceTool,
+  // Step 8 — chain-aware (see the money-safety note above)
+  requestCompletionTool,
+  anchorMilestoneTool,
+  createCommitmentTool,
+  claimRewardTool,
 ];
 
 const BY_NAME: ReadonlyMap<string, AnyToolDefinition> = new Map(

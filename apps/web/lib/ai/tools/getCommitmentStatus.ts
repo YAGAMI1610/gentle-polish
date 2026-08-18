@@ -1,14 +1,23 @@
 import { z } from "zod";
 import { getCommitmentByGoal } from "@/lib/db";
+import {
+  commitmentStatusName,
+  isChainConfigured,
+  readChainConfig,
+  readCommitmentStatus,
+} from "@/lib/chain";
 import type { ToolDefinition } from "./types";
 
 /**
  * `getCommitmentStatus` — read the on-chain-indexed commitment for a goal.
  *
  * Read-only, wallet-scoped, no decision-log entry. Money amounts are returned as
- * strings (Decimal/BigInt) so full uint256 precision survives JSON. This reports
- * status only — creating/funding/claiming a commitment moves real value and is
- * build step 8 (the contract client), never here (CLAUDE.md rules 1–3).
+ * strings (Decimal/BigInt) so full uint256 precision survives JSON. The DB row is
+ * the primary answer; when the chain is configured and the commitment has an
+ * on-chain id, it additionally does a best-effort live status read (a view call —
+ * it moves nothing). A live read failure never breaks the tool; `onchainStatus`
+ * is simply left null. Creating/funding/claiming a commitment moves real value and
+ * is prepared for the user's own wallet to sign, never done here (rules 1–3).
  */
 
 const input = z.object({
@@ -26,6 +35,8 @@ export interface GetCommitmentStatusResult {
   failurePath: string | null;
   onchainCommitmentId: string | null;
   txHash: string | null;
+  /** Live on-chain status name, when a configured chain read succeeded (else null). */
+  onchainStatus: string | null;
 }
 
 const parameters: Record<string, unknown> = {
@@ -64,7 +75,20 @@ export const getCommitmentStatusTool: ToolDefinition<typeof input, GetCommitment
         failurePath: null,
         onchainCommitmentId: null,
         txHash: null,
+        onchainStatus: null,
       };
+    }
+
+    // Best-effort live status: a view call (no funds, no key). Never fatal — if the
+    // RPC is unreachable or the contract isn't deployed, we fall back to the DB row.
+    let onchainStatus: string | null = null;
+    if (isChainConfigured() && commitment.onchainCommitmentId !== null) {
+      try {
+        const raw = await readCommitmentStatus(commitment.onchainCommitmentId, readChainConfig());
+        onchainStatus = commitmentStatusName(raw);
+      } catch {
+        onchainStatus = null;
+      }
     }
 
     return {
@@ -79,6 +103,7 @@ export const getCommitmentStatusTool: ToolDefinition<typeof input, GetCommitment
       onchainCommitmentId:
         commitment.onchainCommitmentId !== null ? commitment.onchainCommitmentId.toString() : null,
       txHash: commitment.txHash ?? null,
+      onchainStatus,
     };
   },
 };
