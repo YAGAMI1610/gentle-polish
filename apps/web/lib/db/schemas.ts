@@ -251,3 +251,30 @@ export const createVerificationRecordInput = z.object({
   modelVersion: z.string().trim().min(1).max(100).optional(),
 });
 export type CreateVerificationRecordInput = z.input<typeof createVerificationRecordInput>;
+
+// ===========================================================================
+// Build step 7 — evidence upload/storage pipeline
+// ===========================================================================
+
+/**
+ * The metadata half of an evidence submission (build-prompt §7/§9). The payload
+ * itself — raw bytes or `contentText` — is handled by the pipeline
+ * (`lib/evidence/storeEvidence.ts`), not here: bytes are size-bounded in the
+ * service and stored off-chain via `EvidenceStorage`, and only their sha256 hash
+ * is persisted in an on-chain-eligible field. `contentText` is UNTRUSTED user data
+ * (rule 5): bounded here, stored, never interpreted as an instruction.
+ *
+ * Exactly one payload kind is expected per call — `bytes` for a binary artifact
+ * (photo/screenshot/file), or `contentText` for a text/reference claim — enforced
+ * in the service where the bytes are in scope.
+ */
+export const storeEvidenceInput = z.object({
+  goalId: idSchema,
+  type: z.nativeEnum(EvidenceType),
+  checkInId: idSchema.optional(),
+  // UNTRUSTED. Off-chain only; never anchored on-chain (§9).
+  contentText: z.string().max(20000).optional(),
+  mimeType: z.string().trim().max(255).optional(),
+  fileName: z.string().trim().max(512).optional(),
+});
+export type StoreEvidenceInput = z.input<typeof storeEvidenceInput>;

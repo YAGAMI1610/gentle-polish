@@ -3,7 +3,7 @@
 Honest record of what is **not** yet real in this repo, per `CLAUDE.md` rules 1 and 6.
 Each entry states what exists today, why, and what the production fix is.
 
-Current build-sequence position: **steps 5 + 6 complete** — the remaining §4 agent tools
+Current build-sequence position: **steps 5–7 complete** — the remaining §4 agent tools
 (§11) and the §6 verification engines + their tools (§12) are in place, typechecked and
 unit-tested. This builds on **step 4** (§10, the SDK-agnostic `AIProvider` boundary, the real
 `GeminiProvider`, the §7 prompt-injection guards, the `createGoal` tool end-to-end, and the
@@ -13,8 +13,8 @@ handler tests are gated on a key / a reachable Postgres (§8), not on any missin
 things are still deliberately deferred and recorded honestly: the **fund/chain tools**
 (`createCommitment`, `claimReward`, on-chain `requestCompletion`) and the **live testnet deploy
 tx hash** both belong to **step 8** and need a funded key / the contract client (see §2, §12).
-The **evidence upload/storage** pipeline is **step 7**. Steps 7–12 of
-`CommitAI-Build-Prompt.md` §14 are outstanding.
+The **evidence upload/storage** pipeline (step 7) is now real and recorded in §13.
+Steps 8–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
 
 ---
 
@@ -391,3 +391,42 @@ claim of dishonesty and never uses accusatory vocabulary; asserted by a regex in
 
 **No write endpoints were added.** Everything here is internal library code behind the same
 boundaries as §10; the AI holds no key and has no fund-moving path (CLAUDE.md rule 3).
+
+## 13. Step 7 — evidence upload/storage pipeline
+
+**Status:** real and verified offline. The `EvidenceStorage` interface and the local-disk driver
+are exercised by always-on tests against a real temp directory (no mocks); the pipeline's
+wallet-scoped privacy behaviour is covered by DB-gated tests that skip cleanly without a Postgres
+(§8). `pnpm --filter web typecheck` is clean.
+
+**What exists and is real:**
+
+- **`apps/web/lib/storage/`** — `EvidenceStorage` (the off-chain blob boundary),
+  `LocalDiskEvidenceStorage` (a real `node:fs/promises` driver), and a `getEvidenceStorage()`
+  factory keyed by `EVIDENCE_STORAGE_DRIVER`. Keys are **content-addressed and wallet-namespaced**
+  (`wallet/<addr>/<sha256>`), so a key encodes ownership, identical bytes dedupe, and a blob for
+  one wallet can never resolve into another's tree. A path-traversal guard rejects malformed keys
+  before they touch disk.
+- **`apps/web/lib/evidence/storeEvidence.ts`** — the pipeline: binary payloads go to
+  `storage.put()`; text claims are hashed (`sha256`) and kept off-chain in the row. Both then flow
+  through the step-3 `createEvidence()`, which enforces goal/check-in ownership. `readEvidenceBlob()`
+  is the wallet-scoped read (returns null for "not yours", "no blob", and "absent" alike).
+
+**Privacy + untrusted-input guarantees (rules 1, 5; §9/§10):** raw bytes/text live off-chain ONLY;
+the row stores a `storageKey` + `contentHash`, and only the hash is ever eligible for on-chain
+anchoring — asserted in `storeEvidence.test.ts` (the hash equals `sha256` of the exact bytes and is
+never the storage pointer). `contentText` is stored byte-for-byte as opaque data; a stored
+injection string produces no verification record and no side effect. Cross-wallet reads return null
+and cross-wallet attaches throw `WalletScopeError`.
+
+**Honest deferrals (rules 1 & 6):**
+
+- **No public upload route exists yet.** This pass ships the server-side pipeline only. The HTTP
+  upload handler + the wallet-connect/SIWE UI that authenticates the caller are **step 9** — write
+  endpoints must not land before SIWE/CSRF are in place (see §4). The pipeline is written so that
+  route becomes a thin wrapper over already-tested logic.
+- **Only the local-disk driver ships.** An S3/Supabase driver is a new class behind the same
+  interface plus a `switch` case in `getEvidenceStorage()` — a config change, not a pipeline change.
+- **Content hardening is deferred.** MIME is checked against an allowlist and total size is capped
+  (`MAX_EVIDENCE_BYTES`), but deep content-sniffing, virus scanning, and EXIF/metadata scrubbing are
+  production follow-ups (step 9 / hardening), noted here rather than silently skipped.
