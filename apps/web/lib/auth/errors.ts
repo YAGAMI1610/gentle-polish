@@ -9,7 +9,7 @@
  *   - Unknown errors map to a generic 500 that never leaks internal detail.
  */
 import { ZodError } from "zod";
-import { WalletScopeError } from "@/lib/db/errors";
+import { WalletScopeError, CommitmentTermsLockedError } from "@/lib/db/errors";
 
 export class UnauthorizedError extends Error {
   readonly code = "UNAUTHORIZED" as const;
@@ -87,6 +87,8 @@ export function toHttpError(err: unknown): HttpErrorShape {
   if (err instanceof ForbiddenError) return { status: 403, body: { error: err.message } };
   // Non-leaking: a scope violation must not reveal whether the row exists.
   if (err instanceof WalletScopeError) return { status: 403, body: { error: "forbidden" } };
+  if (err instanceof CommitmentTermsLockedError)
+    return { status: 409, body: { error: err.message } };
   if (err instanceof BadRequestError) return { status: 400, body: { error: err.message } };
   if (err instanceof PayloadTooLargeError) return { status: 413, body: { error: err.message } };
   if (err instanceof UnsupportedMediaTypeError)

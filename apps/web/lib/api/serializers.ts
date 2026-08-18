@@ -210,8 +210,16 @@ export function toCommitmentView(c: CommitmentRow, goalTitle: string): Commitmen
 
 /**
  * Reward is a VIEW over a commitment's reward leg, not a stored table (schema
- * comment): APPROVED + not-withdrawn ⇒ claimable; rewardWithdrawn ⇒ claimed.
- * A commitment with no reward, or one not yet approved/withdrawn, yields no
+ * comment). Both derived flags mirror the contract exactly so the UI never offers
+ * a claim the chain would reject or mislabels a refund as a claim:
+ *   - claimable ⇐ APPROVED **and** rewardFunded **and** not yet withdrawn.
+ *     `claimReward` reverts `RewardNotFunded` when the reward was never funded, so
+ *     an APPROVED-but-unfunded commitment must NOT show a claimable reward.
+ *   - claimed ⇐ rewardWithdrawn **and** not CANCELLED. `rewardWithdrawn` is set true
+ *     by BOTH `claimReward` (depositor collected the reward) and `cancelCommitment`
+ *     (reward refunded to its funder); only the former is a genuinely "claimed"
+ *     reward, so a cancelled commitment is never surfaced as one here.
+ * A commitment with no reward, or one neither claimable nor claimed, yields no
  * reward row (returns null). `earnedAt`/`claimedAt` derive from the commitment's
  * `updatedAt` — the only real timestamp available without a dedicated column
  * (limitation noted in LIMITATIONS.md).
@@ -220,8 +228,8 @@ export function toRewardView(c: CommitmentRow, goalTitle: string): RewardView | 
   const amount = weiToTokenNumber(c.rewardWei);
   if (amount <= 0) return null;
 
-  const claimed = c.rewardWithdrawn;
-  const claimable = c.status === CommitmentStatus.APPROVED && !c.rewardWithdrawn;
+  const claimed = c.rewardWithdrawn && c.status !== CommitmentStatus.CANCELLED;
+  const claimable = c.status === CommitmentStatus.APPROVED && c.rewardFunded && !c.rewardWithdrawn;
   if (!claimed && !claimable) return null;
 
   const at = c.updatedAt.toISOString();

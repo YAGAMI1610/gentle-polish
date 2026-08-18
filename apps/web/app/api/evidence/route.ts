@@ -27,14 +27,56 @@ import type { EvidenceResult } from "@/lib/api/dto";
  *
  * Boundary hardening (§13, malicious upload): oversize → 413 and disallowed MIME
  * → 415 are refused HERE, before `storeEvidence`, reusing its one allowlist
- * (`isAllowedEvidenceMime`). A coarse Content-Length pre-check bails before the
- * body is buffered; `storeEvidence` still enforces the precise limit internally.
+ * (`isAllowedEvidenceMime`). The body is buffered under a hard byte cap enforced
+ * WHILE streaming — not from the (absent-on-chunked / spoofable) Content-Length
+ * header — so an unlabelled or oversized upload cannot force an unbounded buffer;
+ * `storeEvidence` still enforces the precise per-file limit internally.
  */
 export const dynamic = "force-dynamic";
 
 /** Read a form field as a non-empty string, or undefined. */
 function field(value: FormDataEntryValue | null): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Raw body cap: the per-file limit plus 1MB of multipart-envelope slack. */
+const MAX_UPLOAD_BYTES = MAX_EVIDENCE_BYTES + 1024 * 1024;
+
+/**
+ * Buffer a request body under a hard byte cap, enforced as bytes arrive rather
+ * than trusting Content-Length (which is absent on a chunked upload and can lie).
+ * Aborts with 413 the instant the cap is exceeded, so an unlabelled or oversized
+ * body can never force us to buffer more than `cap` bytes into memory.
+ */
+async function readBodyCapped(
+  body: ReadableStream<Uint8Array> | null,
+  cap: number,
+): Promise<Uint8Array<ArrayBuffer>> {
+  if (!body) return new Uint8Array(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > cap) {
+        throw new PayloadTooLargeError(`evidence exceeds ${MAX_EVIDENCE_BYTES} byte limit`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
 export async function POST(req: Request) {
@@ -47,15 +89,12 @@ export async function POST(req: Request) {
       throw new UnsupportedMediaTypeError("evidence upload must be multipart/form-data");
     }
 
-    // Coarse early-out: reject an obviously-oversized upload by declared length
-    // before buffering it (memory-exhaustion defence). +1MB slack for the
-    // multipart envelope; the exact per-file limit is enforced on decoded bytes.
-    const declaredLen = Number(req.headers.get("content-length"));
-    if (Number.isFinite(declaredLen) && declaredLen > MAX_EVIDENCE_BYTES + 1024 * 1024) {
-      throw new PayloadTooLargeError(`evidence exceeds ${MAX_EVIDENCE_BYTES} byte limit`);
-    }
-
-    const form = await req.formData();
+    // Buffer the body under a hard cap enforced WHILE streaming (not from the
+    // Content-Length header, which a chunked upload omits and an attacker can
+    // spoof), then parse the multipart form from those capped bytes. This bounds
+    // memory for any upload; the precise per-file limit is re-checked below.
+    const raw = await readBodyCapped(req.body, MAX_UPLOAD_BYTES);
+    const form = await new Response(raw, { headers: { "content-type": contentType } }).formData();
     const goalId = field(form.get("goalId"));
     const typeRaw = field(form.get("type"));
     const checkInId = field(form.get("checkInId"));

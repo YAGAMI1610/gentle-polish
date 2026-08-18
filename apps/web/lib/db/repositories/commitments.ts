@@ -1,7 +1,7 @@
 import type { Commitment } from "@prisma/client";
 import { CommitmentStatus, Prisma } from "@prisma/client";
 import { prisma } from "../client";
-import { WalletScopeError } from "../errors";
+import { WalletScopeError, CommitmentTermsLockedError } from "../errors";
 import {
   createDraftCommitmentInput,
   evmAddressSchema,
@@ -78,7 +78,7 @@ export async function createDraftCommitment(
     select: { id: true, onchainCommitmentId: true },
   });
   if (existing && existing.onchainCommitmentId !== null) {
-    throw new Error("this goal already has an on-chain commitment; its terms are fixed");
+    throw new CommitmentTermsLockedError();
   }
 
   // Only the off-chain terms are written; the on-chain anchors stay null (rule 1).

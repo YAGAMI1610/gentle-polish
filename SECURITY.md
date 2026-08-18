@@ -10,8 +10,8 @@ Coverage spans **three layers**, because that is where the guarantees actually l
 
 | Tag     | Layer                                | Command                                                                                         | Result this session                  |
 | ------- | ------------------------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------ |
-| **[F]** | On-chain (Solidity / Foundry)        | `export PATH="$HOME/.foundry/bin:$PATH"; cd contracts && forge test`                            | **42 passed / 0 failed / 0 skipped** |
-| **[H]** | HTTP / auth / upload boundary (Next) | `pnpm --filter web test security`                                                               | **41 passed / 5 skipped** (DB-gated) |
+| **[F]** | On-chain (Solidity / Foundry)        | `export PATH="$HOME/.foundry/bin:$PATH"; cd contracts && forge test`                            | **45 passed / 0 failed / 0 skipped** |
+| **[H]** | HTTP / auth / upload boundary (Next) | `pnpm --filter web test security`                                                               | **42 passed / 5 skipped** (DB-gated) |
 | **[L]** | Backend security primitives          | `pnpm --filter web test contractClient.safety siwe localDiskStorage antiInjection promptGuards` | **40 passed / 0 failed**             |
 
 Run environment: Foundry **v1.7.1** (installed this session; `forge test` cloned submodules fresh, compiled
@@ -39,13 +39,18 @@ value**. The contract enforces; the AI proposes (`CLAUDE.md` rules 2–3).
 | 8   | Changed commitment conditions post-signature    | chain        | `test_noSetterForRewardOrThreshold` (no setter exists for reward or confidence threshold after creation)                                                                                                                                                                                      | [F]    |
 | 9   | Duplicate completion                            | chain        | `test_doubleRelease_reverts`, `test_doubleClaim_reverts`, `test_cannotReleaseAfterCancel`, `test_fundReward_cannotDoubleFund`                                                                                                                                                                 | [F]    |
 | 10  | Replayed verification                           | HTTP + prim  | `§13.5 SIWE verify rejects replay/forgery with 401` (route) **+** `verifySiwe` suite (EIP-191 crypto: stale nonce, domain mismatch, tampered/spoofed signature all rejected)                                                                                                                  | [H][L] |
-| 11  | Malicious evidence upload                       | HTTP + prim  | `§13.6 malicious upload is refused at the boundary` (415 non-multipart, 415 bad MIME, 413 oversize, path-traversal key rejected) **+** `localDiskStorage` key-guard suite                                                                                                                     | [H][L] |
+| 11  | Malicious evidence upload                       | HTTP + prim  | `§13.6 malicious upload is refused at the boundary` (415 non-multipart, 415 bad MIME, 413 oversize, **413 no-Content-Length streaming cap**, path-traversal key rejected) **+** `localDiskStorage` key-guard suite                                                                            | [H][L] |
 | 12  | Prompt injection via evidence                   | HTTP + prim  | `§13.7 evidence text cannot escape the untrusted-data fence` **+** `antiInjection` (injected payloads pinned LOW, never VERIFIED, no tool call) **+** `promptGuards`                                                                                                                          | [H][L] |
 | 13  | AI tool-call abuse (architecturally impossible) | HTTP + prim  | `§13.3/§13.8 attestor surface is value-neutral and frozen` (exactly 4 methods, frozen, no fund method reachable) **+** `contractClient.safety` (prepare-only encoders, no signer)                                                                                                             | [H][L] |
 
 **Every item maps to at least one test that was RUN and PASSED this session.** No item is covered only by
-description, and no new test was written to fill a gap — the mapping above is coverage that already existed,
-now executed end-to-end with output shown.
+description, and the original §13 closeout backfilled nothing — every mapping above was pre-existing coverage,
+executed end-to-end with output shown. The later post-build hardening pass (`LIMITATIONS.md` §22) then _added_
+7 tests as **regression proofs for bugs it fixed**, not to make an uncovered item pass: 3 Foundry tests for
+cancel-refund liveness (a rejecting reward-funder can no longer strand the depositor's principal — lifting
+[F] from 42 → **45**) and 4 vitest tests (a no-Content-Length streaming-cap test strengthening item 11,
+lifting [H] from 41 → **42**, plus a reward-view pair and a 409 conflict-mapping test that sit outside the
+§13 matrix).
 
 ### Notes on the two items with a caveat (honest, per rules 1 & 6)
 
@@ -69,12 +74,12 @@ now executed end-to-end with output shown.
 ## Reproduce everything (four commands, ~4 min cold)
 
 ```bash
-# [F] on-chain invariants — access control, reentrancy, invalid/duplicate completion, no-post-sig-setter
+# [F] on-chain invariants — access control, reentrancy, invalid/duplicate completion, no-post-sig-setter, refund liveness
 export PATH="$HOME/.foundry/bin:$PATH"
-( cd contracts && forge test )                 # → 42 passed; 0 failed; 0 skipped
+( cd contracts && forge test )                 # → 45 passed; 0 failed; 0 skipped
 
 # [H] HTTP / auth / upload boundary (always-on subset runs with no DB)
-pnpm --filter web test security                # → 41 passed | 5 skipped (cross-wallet, DB-gated)
+pnpm --filter web test security                # → 42 passed | 5 skipped (cross-wallet, DB-gated)
 
 # [L] backend security primitives cited by the boundary suite
 pnpm --filter web test contractClient.safety siwe localDiskStorage antiInjection promptGuards  # → 40 passed
@@ -82,7 +87,7 @@ pnpm --filter web test contractClient.safety siwe localDiskStorage antiInjection
 # Item 2's DB-gated 5 tests, run for real (needs Docker):
 docker compose up -d db
 pnpm --filter web db:generate && pnpm --filter web db:migrate
-pnpm --filter web test security                # now 46 passed | 0 skipped
+pnpm --filter web test security                # now 47 passed | 0 skipped
 ```
 
 The full always-on gate (`pnpm --filter web typecheck && pnpm --filter web lint && pnpm format:check &&
@@ -97,8 +102,9 @@ printed reasons in an offline sandbox (`LIMITATIONS.md` §8).
 
 - **Steps 1–12 all landed** (steps 1–8 before the autonomous run; 9–12 as commits during it). Step→commit
   map and the full gate record are in `LIMITATIONS.md` §18–§20 and the build-run memory.
-- **Step 1 proof reconfirmed live:** `forge test` → **42/42** on a fresh recursive clone (this is §14
-  step 1's stated "passing `forge test` suite" gate, re-run today, not cited).
+- **Step 1 proof reconfirmed live:** `forge test` → **45/45** on a fresh recursive clone (this is §14
+  step 1's stated "passing `forge test` suite" gate, re-run today, not cited). The count rose from 42 to 45
+  with the §22 cancel-refund escrow-liveness tests (`LIMITATIONS.md` §22.2).
 - **Recorded real testnet tx (step 2 / step 8):** `CommitmentVault` deployed at
   `0x0076c4269be298429af7827a2a5cc40a65f8f8a8`, deploy tx
   `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`

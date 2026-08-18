@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { WalletScopeError } from "@/lib/db/errors";
+import { WalletScopeError, CommitmentTermsLockedError } from "@/lib/db/errors";
 import { BadRequestError, ForbiddenError, UnauthorizedError, toHttpError } from "./errors";
 
 describe("toHttpError", () => {
@@ -20,6 +20,14 @@ describe("toHttpError", () => {
     expect(r.status).toBe(403);
     expect(r.body.error).toBe("forbidden");
     expect(r.body.error).not.toContain("wallet");
+  });
+
+  it("maps a locked-terms conflict to 409, not a 500", () => {
+    // Re-creating terms for an already-anchored goal is a client conflict, not a
+    // server fault: it must surface as 409 so the caller does not blindly retry.
+    const r = toHttpError(new CommitmentTermsLockedError());
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatch(/already has an on-chain commitment/);
   });
 
   it("maps BadRequestError and ZodError to 400", () => {

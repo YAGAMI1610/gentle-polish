@@ -17,7 +17,10 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
 /// I1. Principal is only ever payable to `commitment.depositor`. There is no other
 ///     destination in any code path, on any outcome, for any caller.
 /// I2. Reward is only ever payable to `commitment.depositor` (on attested success) or
-///     back to `commitment.rewardFunder` (on cancellation). Never anywhere else.
+///     back to `commitment.rewardFunder` (on cancellation). Never anywhere else. If a
+///     rejecting funder cannot receive its cancellation refund, that refund is held in
+///     `escrowedRefunds[rewardFunder]` for the funder alone to pull — still never to
+///     anyone else.
 /// I3. No function that changes a balance can be called by the owner or the attestor.
 ///     Fund movement is depositor-only, always. The owner's sole power is naming the
 ///     attestor address; the attestor's sole power is attesting.
@@ -29,7 +32,10 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
 ///     the attestor can change the terms a depositor signed up to.
 /// I6. Every commitment has a terminal exit that does not depend on the attestor
 ///     existing, being online, or cooperating — see `cancelCommitment`. Funds cannot
-///     be stranded by backend failure.
+///     be stranded by backend failure, nor by a third-party reward funder that rejects
+///     its refund: the depositor's principal and the funder's reward are refunded on
+///     independent legs (the reward leg falls back to pull-based `escrowedRefunds`), so
+///     a rejecting funder cannot block the depositor's principal.
 ///
 /// The AI never holds a key that can move money. It can propose (`requestCompletion`)
 /// and attest (`approveCompletion`), and attesting only flips a flag. Every transfer is
@@ -131,6 +137,14 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
     mapping(address wallet => uint256[] commitmentIds) private _commitmentsByWallet;
     mapping(uint256 goalId => uint256 commitmentId) public commitmentOfGoal;
 
+    /// @notice Refunds a cancellation could not push to a rejecting recipient, held for
+    ///         that recipient to pull via {withdrawEscrow}. Exists so a reward funder
+    ///         that rejects ETH cannot block the depositor's principal refund during
+    ///         {cancelCommitment}: the two refund legs are independent. Only ever
+    ///         credited to a commitment's own reward funder (I2); a caller can withdraw
+    ///         only its own balance.
+    mapping(address recipient => uint256 amount) public escrowedRefunds;
+
     // -------------------------------------------------------------------------
     // Events — the on-chain record permitted by the privacy model (section 9)
     // -------------------------------------------------------------------------
@@ -159,6 +173,8 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
     event CommitmentCancelled(
         uint256 indexed commitmentId, address indexed depositor, uint256 principalReturned, uint256 rewardReturned
     );
+    event RefundEscrowed(address indexed recipient, uint256 amount);
+    event EscrowWithdrawn(address indexed recipient, uint256 amount);
 
     // -------------------------------------------------------------------------
     // Errors
@@ -185,6 +201,7 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
     error AlreadyWithdrawn();
     error CancellationNotYetOpen(uint64 opensAt, uint64 now_);
     error TransferFailed(address to, uint256 amount);
+    error NothingToWithdraw();
 
     // -------------------------------------------------------------------------
     // Modifiers
@@ -495,9 +512,27 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
 
         emit CommitmentCancelled(commitmentId, c.depositor, principalReturned, rewardReturned);
 
-        // Reward goes back to its funder, principal to the depositor (I2, I1).
-        if (rewardReturned > 0) _send(rewardFunder, rewardReturned);
+        // Principal to the depositor (I1), reward back to its funder (I2). The two legs
+        // are independent so a reward funder that rejects ETH cannot block the
+        // depositor's principal: the reward refund is push-with-escrow-fallback (held in
+        // `escrowedRefunds` for the funder to pull) while the principal uses the strict
+        // send. Reward first; if the funder rejects, its refund escrows without
+        // reverting, then the principal still goes out.
+        if (rewardReturned > 0) _refundOrEscrow(rewardFunder, rewardReturned);
         if (principalReturned > 0) _send(c.depositor, principalReturned);
+    }
+
+    /// @notice Pull a refund that {cancelCommitment} could not push to you because your
+    ///         address rejected the transfer. Pays only the caller's own escrow.
+    /// @dev Pure escrow bookkeeping, no status coupling. `nonReentrant` + zero-before-send
+    ///      (checks-effects-interactions): if the caller still cannot receive, the whole
+    ///      call reverts and the escrow is preserved for a later, successful pull.
+    function withdrawEscrow() external nonReentrant {
+        uint256 amount = escrowedRefunds[msg.sender];
+        if (amount == 0) revert NothingToWithdraw();
+        escrowedRefunds[msg.sender] = 0;
+        emit EscrowWithdrawn(msg.sender, amount);
+        _send(msg.sender, amount);
     }
 
     // -------------------------------------------------------------------------
@@ -567,5 +602,20 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
     function _send(address to, uint256 amount) private {
         (bool ok,) = payable(to).call{value: amount}("");
         if (!ok) revert TransferFailed(to, amount);
+    }
+
+    /// @dev Refund `amount` to `to`, or — if `to` rejects the transfer — credit it to
+    ///      `escrowedRefunds[to]` for `to` to pull later via {withdrawEscrow}. Never
+    ///      reverts, so one leg of a cancellation cannot block the other: a rejecting
+    ///      reward funder cannot strand the depositor's principal. The amount stays in
+    ///      the contract until pulled, so nothing is created or lost. Reached only from
+    ///      the `nonReentrant` `cancelCommitment`, after the commitment is already
+    ///      marked `Cancelled`, so a re-entering recipient can take nothing.
+    function _refundOrEscrow(address to, uint256 amount) private {
+        (bool ok,) = payable(to).call{value: amount}("");
+        if (!ok) {
+            escrowedRefunds[to] += amount;
+            emit RefundEscrowed(to, amount);
+        }
     }
 }

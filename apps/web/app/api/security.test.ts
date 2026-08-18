@@ -362,6 +362,36 @@ describe("§13.6 malicious upload is refused at the boundary (always-on)", () =>
     expect(res.status).toBe(413);
   });
 
+  it("a body with no Content-Length is still capped while streaming (413), never buffered unbounded", async () => {
+    await setSession({ address: ADDR_A });
+    // A ReadableStream body carries NO Content-Length (it is sent chunked). The old
+    // pre-check read the header as 0 and waved it through to be buffered whole — a
+    // memory-exhaustion DoS. The streaming cap instead aborts the instant the bytes
+    // exceed MAX_EVIDENCE_BYTES + 1MB envelope slack, before the body is fully read.
+    const CHUNK = 1024 * 1024; // 1 MiB per pull
+    const OVER = MAX_EVIDENCE_BYTES + 2 * CHUNK; // > cap (= MAX_EVIDENCE_BYTES + 1 MiB)
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= OVER) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(CHUNK));
+        sent += CHUNK;
+      },
+    });
+    const req = new Request(`${BASE}/api/evidence`, {
+      method: "POST",
+      headers: { origin: BASE, "content-type": "multipart/form-data; boundary=streamtest" },
+      body: stream,
+      // Node requires `duplex` when the body is a stream; not yet in the DOM RequestInit type.
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const res = await postEvidence(req);
+    expect(res.status).toBe(413);
+  });
+
   it("the storage key guard rejects a path-traversal key (re-assert; full proof in localDiskStorage.test.ts)", async () => {
     const storage = new LocalDiskEvidenceStorage("/tmp/commitai-security-noop");
     // pathFor() rejects a malformed/hostile key before ever touching the disk, so

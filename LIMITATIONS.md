@@ -72,10 +72,11 @@ address `0x0076c4269be298429af7827a2a5cc40a65f8f8a8`, deploy tx
 `contracts/src/CommitmentVault.sol` exists with the §8 function set, an
 attestor/pull-payment trust model, `ReentrancyGuard` on every fund mover, and a
 non-punitive `cancelCommitment` that returns 100% of principal to the depositor and any
-reward to its funder. `contracts/test/` has 42 tests (happy path, cancel, reentrancy with
+reward to its funder. `contracts/test/` has 45 tests (happy path, cancel, reentrancy with
 the guard proven to fire, unauthorized approve, double-claim, wrong-caller withdrawal,
-rejecting-recipient atomicity, plus fuzz). `forge build` is clean under `deny="warnings"`
-and all 42 pass on a fresh recursive clone.
+rejecting-recipient atomicity, the cancel-refund escrow fallback added in the §22 hardening
+pass, plus fuzz). `forge build` is clean under `deny="warnings"` and all 45 pass on a fresh
+recursive clone.
 
 **The deployment (real, verified against the explorer — `CLAUDE.md` rule 1):**
 `CommitmentVault` is live at `0x0076c4269be298429af7827a2a5cc40a65f8f8a8`, created in the
@@ -85,6 +86,14 @@ transaction `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`
 matches the source: `MAX_GRACE_PERIOD` reads `15552000` (180 days), `nextGoalId` /
 `nextCommitmentId` are `1` (fresh), and the backend `contractClient` reads it live (the
 integration test's vault-read now runs instead of skipping).
+
+**Deployed bytecode predates the §22 escrow fix (honesty note, rule 1):** the live vector-hardening
+pass in §22 adds a pull-payment escrow fallback to `cancelCommitment` (3 new tests → the 45 above). The
+deployed instance at `0x0076c4…f8f8a8` is **immutable** and was created from the pre-fix source, so it does
+**not** carry that fallback. This does not make the deployed instance unsafe — its principal refund is
+still depositor-only and non-confiscatory — it only leaves the narrow reward-funder griefing vector open on
+that specific instance. Closing it on-chain requires a **redeploy** (a user action needing the rotated
+deployer key); the source, tests, and a future deployment carry the fix.
 
 **Production caveat — separation of duties (opsec, not a fund-safety hole):** on this
 testnet deployment the `owner`, the `attestor`, and the deployer are the **same** account
@@ -802,12 +811,12 @@ confirmation", "no hardcoded script anywhere", "never fake calldata", "a real cr
 > test(s) → **run status this session** → reproduce command, across the on-chain [F], HTTP-boundary [H],
 > and backend-primitive [L] layers. It is the "must all pass before calling this done" record; this section
 > is the design narrative behind it. Re-run confirmation (2026-08-18): the contract layer that item 3–9 rely
-> on was executed live — `forge test` → **42 passed / 0 failed / 0 skipped** (Foundry v1.7.1 installed this
+> on was executed live — `forge test` → **45 passed / 0 failed / 0 skipped** (Foundry v1.7.1 installed this
 > session, §8) — so those items are now _run_, not merely _cited_.
 
 **Status:** real and verified in-sandbox. `pnpm --filter web typecheck`, `lint`, and `pnpm format:check`
-are clean; `pnpm --filter web test` runs **243 always-on tests green across 43 files** (50 DB-/key-/chain-
-gated tests skip cleanly, §8); the new suite alone is **41 always-on green + 5 DB-gated skipped**; `pnpm
+are clean; `pnpm --filter web test` runs **247 always-on tests green across 43 files** (50 DB-/key-/chain-
+gated tests skip cleanly, §8); the new suite alone is **42 always-on green + 5 DB-gated skipped**; `pnpm
 --filter web build` (`--webpack`, §7) still exits 0 (the `.test.ts` file is not a route — no `/api/security`
 endpoint is emitted). This is **phase 4 of 4** for build step 9 and completes build step 10; only steps
 11–12 of §14 remain.
@@ -834,7 +843,7 @@ lower-layer proof for the invariants that live below the route):
    commitment → 404. Skips cleanly with a printed reason when no Postgres is up; the repository-layer proof
    is always-on in §9.
 3. **Contract access-control / reentrancy / invalid-completion / changed-conditions / duplicate-completion.**
-   Enforced **on-chain** — the authoritative proof is the 42 Foundry tests in `contracts/` (§2). Re-asserted
+   Enforced **on-chain** — the authoritative proof is the 45 Foundry tests in `contracts/` (§2). Re-asserted
    here always-on: `getAttestorClient()` exposes exactly the four value-neutral methods, is frozen, and has
    no fund-moving method reachable.
 4. **Unauthorized reward claim / withdrawal.** Always-on: `prepareClaimReward` returns UNSIGNED calldata
@@ -1047,11 +1056,11 @@ chain when configured, and every unconfigured capability returns an honest `503`
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | Real AI tool-calling             | bounded agentic `runner.ts` + `registry.ts` (19 tools); `GeminiProvider` behind the SDK-agnostic boundary (§10, §11) |
 | Real verification logic          | `lib/ai/verification/` reality-check + confidence engines; evidence quality pinned by type (§12)                     |
-| Real deployed & tested contracts | `CommitmentVault` at `0x0076c4…f8f8a8`; **42/42** Foundry tests re-run this session (`SECURITY.md` [F], §2)          |
+| Real deployed & tested contracts | `CommitmentVault` at `0x0076c4…f8f8a8`; **45/45** Foundry tests re-run this session (`SECURITY.md` [F], §2)          |
 | Real testnet transactions        | real deploy tx `0xde9e442…9cdd4` (explorer-verified); all fund ops are depositor-signed prepare→sign→record (§17)    |
 | Real database                    | Prisma schema + wallet-scoped repositories; reads/writes go to real Postgres (§9)                                    |
 | Real privacy scoping             | SIWE identity; cross-wallet reads → 404 (non-leak), writes → 403 (`SECURITY.md` items 1–2, §13.1/.2, §9)             |
-| Real security testing            | `SECURITY.md` — all 13 §13 items run this session across 3 layers (42 [F] + 41 [H] + 40 [L] passing)                 |
+| Real security testing            | `SECURITY.md` — all 13 §13 items run this session across 3 layers (45 [F] + 42 [H] + 40 [L] passing)                 |
 | Real end-to-end UX               | every action screen rebuilt on real backend calls; placeholder data surface deleted (§1, §16, §17)                   |
 
 **Build order followed (§16's stated sequence):** repo skeleton → contracts + tests (§2) → backend + AI
@@ -1063,3 +1072,90 @@ above; no step jumped ahead of its predecessor's proof (`CLAUDE.md` rule 4).
 deployed testnet contract — proven headless this session by the live vault read above, and end-to-end by the
 human-driven signed run in `DEMO.md`. The only remaining actions are operational and the user's: rotate the
 three exposed secrets, `git push`, and perform the live signed run with a funded wallet + Gemini key + DB.
+
+## 22. Post-build hardening — bug-fix pass (2026-08-18)
+
+**Status:** done and gate-verified. After the §1–§21 build was closed out, a full bug-check of the
+money-adjacent and boundary code surfaced four issues; all four are now fixed with real tests, and every gate
+was re-run live (numbers below are actual output, `CLAUDE.md` "show real output"). No fund-safety invariant
+changed — the two money-path fixes only _remove_ ways a third party could grief or mislead, never a way to
+move funds.
+
+**Gates re-run this session (all green):** `forge test` → **45 passed / 0 failed / 0 skipped**;
+`pnpm --filter web typecheck` · `lint` · (root) `pnpm format:check` → clean; `pnpm --filter web test` →
+**247 passed / 50 skipped** across 43 files (was 243 → **+4 new tests**, all always-on); `pnpm --filter web
+build` (`--webpack`) → compiles every route; grep gate (`mock|fake|TODO: real|hardcoded|demo-data|
+example-botchain`, non-test source) → **no matches**.
+
+### 22.1 Evidence-upload memory-exhaustion DoS — MEDIUM — FIXED
+
+- **Bug:** `app/api/evidence/route.ts` gated upload size on `Number(req.headers.get("content-length"))`.
+  A missing header parsed to `0` and a malformed one to `NaN`; **both slipped past** the `> cap` check and
+  fell into `await req.formData()`, which buffers the **entire** body into memory. An attacker could stream an
+  unbounded (or Content-Length-spoofed) chunked body and exhaust server memory before the precise per-file
+  check at the decoded-bytes stage ever ran.
+- **Fix:** a `readBodyCapped(req.body, MAX_EVIDENCE_BYTES + 1MB)` helper enforces the cap **while streaming**
+  — it counts bytes as chunks arrive and aborts with `PayloadTooLargeError` (**413**) the instant the total
+  exceeds the cap, never trusting the header. The multipart form is then parsed from those capped bytes
+  (`new Response(raw, { headers: { "content-type": contentType } }).formData()`). The exact per-file limit is
+  still re-checked on the decoded blob afterward.
+- **Proof:** new always-on test `§13.6 … a body with no Content-Length is still capped while streaming (413)`
+  drives a header-less `ReadableStream` body over the cap and asserts 413. The pre-existing non-multipart→415,
+  bad-MIME→415, and oversize-file→413 tests remain green (the auth + content-type checks still precede the
+  body read).
+
+### 22.2 `cancelCommitment` reward-funder griefing — LOW→MEDIUM — FIXED (source; deployed instance needs redeploy)
+
+- **Bug:** `fundReward` is permissionless — anyone can fund a commitment's reward. `cancelCommitment` refunded
+  the reward to that funder with a push transfer that **reverts the whole call** if the funder rejects ETH. A
+  malicious funder could therefore **strand the depositor's principal**: the depositor could never cancel.
+- **Fix:** the reward refund leg now uses `_refundOrEscrow` — a pull-payment fallback that, if the push
+  fails, credits `escrowedRefunds[funder]` (emitting `RefundEscrowed`) instead of reverting. The depositor's
+  principal goes out on its own independent leg regardless. The funder later pulls its refund via a new
+  `withdrawEscrow()` (`nonReentrant`, checks-effects-interactions, `NothingToWithdraw` on an empty balance).
+  This preserves invariants I1–I6 (reward still only ever reaches its funder; nothing reaches owner/attestor).
+- **Proof:** 3 new Foundry tests — `test_cancel_rejectingRewardFunder_doesNotBlockPrincipal`,
+  `test_withdrawEscrow_pullsEscrowedRefund`, `test_withdrawEscrow_revertsWhenNothingOwed` — plus the
+  unchanged `test_cancel_toRejectingReceiver_revertsWholeCall` and reentrancy tests still pass (45/45).
+- **Caveat (rule 1):** the **deployed** vault `0x0076c4…f8f8a8` is immutable and predates this fix (see the
+  §2 honesty note). The fix lives in source + tests + any future deployment; realizing it on-chain needs a
+  redeploy with the rotated deployer key (a user action).
+
+### 22.3 Reward-view mislabelling — two latent correctness bugs — FIXED
+
+`lib/api/serializers.ts` `toRewardView` derives the UI's reward state from a commitment. Two derivations
+disagreed with the contract; both are **latent today** (no chain→DB sync loop yet sets these DB fields to the
+triggering values) and were fixed proactively so they cannot bite once that loop lands.
+
+- **Bug 1 — false "claimable":** `claimable` was `APPROVED && !rewardWithdrawn`, omitting `rewardFunded`. An
+  APPROVED-but-unfunded commitment would be shown as claimable, but on-chain `claimReward` reverts
+  `RewardNotFunded` — the user would sign a doomed transaction. **Fix:** `claimable = APPROVED &&
+rewardFunded && !rewardWithdrawn`.
+- **Bug 2 — cancel mislabelled as claimed:** `claimed` was `rewardWithdrawn` alone, but that flag is set true
+  by **both** `claimReward` (depositor collected) **and** `cancelCommitment` (reward refunded to its funder).
+  A cancelled commitment would surface as a "claimed reward". **Fix:** `claimed = rewardWithdrawn && status
+!== CANCELLED`.
+- **Proof:** 2 new serializer tests (`is NOT claimable when APPROVED but the reward was never funded`; `is NOT
+a claimed reward when the commitment was cancelled`); the existing "claimable" test was corrected to set
+  `rewardFunded: true` (its old reliance on the default `false` was exactly Bug 1's buggy path).
+
+### 22.4 Draft-conflict returned 500 instead of 409 — informational — FIXED
+
+- **Bug:** `createDraftCommitment` threw a plain `Error` when a goal already had an on-chain commitment (terms
+  are write-once), which `toHttpError` mapped to a generic **500** — a client conflict surfaced as a server
+  fault (pages an operator; tells the caller nothing about whether to retry).
+- **Fix:** a typed `CommitmentTermsLockedError` in `lib/db/errors.ts` (mirroring `WalletScopeError`'s
+  domain-named pattern), mapped to **409 Conflict** in `toHttpError`.
+- **Proof:** new test `toHttpError … maps a locked-terms conflict to 409, not a 500`.
+
+### 22.5 Reviewed and deliberately left as-is (safe version + documented deviation, rules 1/6)
+
+- **`assertSameOrigin` compares host only, not scheme/port.** Deliberate: a scheme/port-strict compare
+  produces false **403**s behind the common reverse-proxy/TLS-terminator setup (proxy forwards `http` origin
+  upstream). The CSRF posture is already defence-in-depth — middleware `Sec-Fetch-Site` + a `secure`,
+  `sameSite=lax`, httpOnly session cookie — so host-only origin matching is the safe default; tightening it is
+  deployment-specific configuration, not a code fix.
+- **Evidence MIME allowlist admits `text/*` (incl. HTML/SVG).** Safe as stored: evidence is served for
+  download with `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, so a stored HTML/SVG is
+  never rendered inline as active content in the app origin. Narrowing the allowlist (e.g. dropping SVG) is a
+  product decision about what evidence types to accept, not a security hole to patch.

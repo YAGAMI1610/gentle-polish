@@ -365,9 +365,13 @@ describe("toRewardView", () => {
     expect(toRewardView(commitmentRow({ status: CommitmentStatus.ACTIVE }), "g")).toBeNull();
   });
 
-  it("is claimable when APPROVED and not withdrawn", () => {
+  it("is claimable when APPROVED, funded, and not withdrawn", () => {
     const reward = toRewardView(
-      commitmentRow({ status: CommitmentStatus.APPROVED, rewardWithdrawn: false }),
+      commitmentRow({
+        status: CommitmentStatus.APPROVED,
+        rewardFunded: true,
+        rewardWithdrawn: false,
+      }),
       "Read 12 books",
     );
     expect(reward?.state).toBe("claimable");
@@ -378,6 +382,21 @@ describe("toRewardView", () => {
     expect(reward && "claimedAt" in reward).toBe(false);
   });
 
+  it("is NOT claimable when APPROVED but the reward was never funded", () => {
+    // `claimReward` reverts RewardNotFunded on-chain, so an APPROVED-but-unfunded
+    // commitment must not surface a claimable reward the wallet could never collect.
+    expect(
+      toRewardView(
+        commitmentRow({
+          status: CommitmentStatus.APPROVED,
+          rewardFunded: false,
+          rewardWithdrawn: false,
+        }),
+        "Read 12 books",
+      ),
+    ).toBeNull();
+  });
+
   it("is claimed once the reward has been withdrawn", () => {
     const reward = toRewardView(
       commitmentRow({ status: CommitmentStatus.CLOSED, rewardWithdrawn: true }),
@@ -385,6 +404,18 @@ describe("toRewardView", () => {
     );
     expect(reward?.state).toBe("claimed");
     expect(reward?.claimedAt).toBe("2026-08-05T00:00:00.000Z");
+  });
+
+  it("is NOT a claimed reward when the commitment was cancelled", () => {
+    // cancelCommitment also sets rewardWithdrawn (the reward is refunded to its
+    // funder), but that is not a depositor "claim" — so a cancelled commitment
+    // must never appear as a claimed reward.
+    expect(
+      toRewardView(
+        commitmentRow({ status: CommitmentStatus.CANCELLED, rewardWithdrawn: true }),
+        "Read 12 books",
+      ),
+    ).toBeNull();
   });
 });
 

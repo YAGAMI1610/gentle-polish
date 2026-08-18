@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {CommitmentVault} from "../src/CommitmentVault.sol";
-import {ReentrantAttacker, RejectingReceiver} from "./Attackers.sol";
+import {ReentrantAttacker, RejectingReceiver, TogglingReceiver} from "./Attackers.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title CommitmentVault test suite
@@ -43,6 +43,8 @@ contract CommitmentVaultTest is Test {
     event CommitmentCancelled(
         uint256 indexed commitmentId, address indexed depositor, uint256 principalReturned, uint256 rewardReturned
     );
+    event RefundEscrowed(address indexed recipient, uint256 amount);
+    event EscrowWithdrawn(address indexed recipient, uint256 amount);
 
     function setUp() public {
         vm.prank(owner);
@@ -614,6 +616,77 @@ contract CommitmentVaultTest is Test {
         rr.cancel(id);
         assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Active));
         assertEq(address(vault).balance, PRINCIPAL);
+    }
+
+    // -------------------------------------------------------------------------
+    // Rejecting REWARD FUNDER cannot block the depositor's principal (escrow fix)
+    // -------------------------------------------------------------------------
+
+    function test_cancel_rejectingRewardFunder_doesNotBlockPrincipal() public {
+        TogglingReceiver funder = new TogglingReceiver(vault); // accept == false → rejects ETH
+        vm.deal(address(funder), REWARD);
+
+        // Open-ended commitment (deadline 0) so cancellation is immediately available.
+        vm.startPrank(depositor);
+        uint256 goalId = vault.registerGoal(GOAL_HASH);
+        uint256 id = vault.createCommitment(goalId, PRINCIPAL, REWARD, 0, 0, THRESHOLD);
+        vm.stopPrank();
+
+        // A third-party funder that rejects ETH funds the reward; depositor locks principal.
+        funder.fundReward(id, REWARD);
+        vm.prank(depositor);
+        vault.lockFunds{value: PRINCIPAL}(id);
+
+        uint256 depBefore = depositor.balance;
+
+        // The reward refund cannot be pushed (funder rejects) → it escrows without
+        // reverting, and the depositor's principal still goes out. Cancel SUCCEEDS
+        // (before the fix this reverted, stranding the principal).
+        vm.expectEmit(true, true, false, true);
+        emit CommitmentCancelled(id, depositor, PRINCIPAL, REWARD);
+        vm.expectEmit(true, false, false, true);
+        emit RefundEscrowed(address(funder), REWARD);
+        vm.prank(depositor);
+        vault.cancelCommitment(id);
+
+        assertEq(depositor.balance, depBefore + PRINCIPAL, "principal returned to depositor");
+        assertEq(vault.escrowedRefunds(address(funder)), REWARD, "reward held in escrow for funder");
+        assertEq(address(vault).balance, REWARD, "only the escrowed reward remains");
+        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled));
+    }
+
+    function test_withdrawEscrow_pullsEscrowedRefund() public {
+        TogglingReceiver funder = new TogglingReceiver(vault);
+        vm.deal(address(funder), REWARD);
+
+        vm.startPrank(depositor);
+        uint256 goalId = vault.registerGoal(GOAL_HASH);
+        uint256 id = vault.createCommitment(goalId, PRINCIPAL, REWARD, 0, 0, THRESHOLD);
+        vm.stopPrank();
+        funder.fundReward(id, REWARD);
+        vm.prank(depositor);
+        vault.lockFunds{value: PRINCIPAL}(id);
+        vm.prank(depositor);
+        vault.cancelCommitment(id); // reward escrows: funder still rejecting
+
+        assertEq(vault.escrowedRefunds(address(funder)), REWARD);
+        assertEq(address(funder).balance, 0);
+
+        // Funder can now accept and pull exactly its escrowed reward — no one else can.
+        funder.setAccept(true);
+        vm.expectEmit(true, false, false, true);
+        emit EscrowWithdrawn(address(funder), REWARD);
+        funder.withdrawEscrow();
+
+        assertEq(address(funder).balance, REWARD, "funder pulled its reward");
+        assertEq(vault.escrowedRefunds(address(funder)), 0, "escrow cleared");
+        assertEq(address(vault).balance, 0, "vault fully drained");
+    }
+
+    function test_withdrawEscrow_revertsWhenNothingOwed() public {
+        vm.prank(stranger);
+        vm.expectRevert(CommitmentVault.NothingToWithdraw.selector);
+        vault.withdrawEscrow();
     }
 
     // -------------------------------------------------------------------------
