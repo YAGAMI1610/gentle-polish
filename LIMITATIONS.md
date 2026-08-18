@@ -3,7 +3,9 @@
 Honest record of what is **not** yet real in this repo, per `CLAUDE.md` rules 1 and 6.
 Each entry states what exists today, why, and what the production fix is.
 
-Current build-sequence position: **steps 5–8 complete (code)** — step 8 adds the viem
+Current build-sequence position: **steps 1–11 of `CommitAI-Build-Prompt.md` §14 are complete; only step 12
+(the §15 end-to-end demo script) remains.** The record below is layered by step and read chronologically —
+later sections supersede earlier "outstanding" notes. Step 8 adds the viem
 `CommitmentVault` client (`apps/web/lib/chain/`), the `ChainTransaction` indexer
 (`repositories/chainTx.ts`), and the chain-aware tools registered safely
 (`createCommitment` / `claimReward` are **prepare-only**; `requestCompletion` /
@@ -23,8 +25,10 @@ the live-gated vault read now runs against it and passes (see §2 and §14). **S
 build step 10 have landed** — the SIWE + iron-session + CSRF/origin auth foundation (§4, §15), the real
 read wiring that deletes the placeholder data surface (§16), the write / AI / prepare-sign-record flows
 that rebuild every action screen on real backend calls (§17), and the §13 security-test suite that drives
-the real HTTP/auth/upload boundary (§18 = build step 10). Steps 11–12 of `CommitAI-Build-Prompt.md` §14
-(the final LIMITATIONS completeness pass and the §15 end-to-end demo script) are the only outstanding work.
+the real HTTP/auth/upload boundary (§18 = build step 10). **Build step 11 has now landed** — the final
+completeness pass that documents the `approveCompletion` trust model in full and consolidates every
+hackathon-scale simplification with its production fix into one index (§19). Only step 12 of
+`CommitAI-Build-Prompt.md` §14 (the §15 end-to-end demo script) is outstanding.
 
 ---
 
@@ -871,3 +875,99 @@ over `apps/web`, excluding `node_modules`/`.next`): production (non-test) source
 hit is a rule-1 honesty comment stating the code does **not** fake. The new test file's only matches are
 `vi.mock("next/headers")` (the cookie-store seam described above) and a comment stating "no route logic is
 mocked" — a test double for the cookie transport, not a fake of any money / AI / chain path.
+
+## 19. Step 11 — final completeness pass: the `approveCompletion` trust model + simplifications index
+
+**Status:** done. This is the build-sequence step 11 deliverable — the explicit, in-one-place record of
+every hackathon-scale simplification and its production fix, with the `approveCompletion` trust model (build
+prompt §8, the spot flagged as most likely to be simplified badly) documented in full. It adds no code; it
+is the honesty audit `CLAUDE.md` rules 1 & 6 require before the build is called done.
+
+### 19.1 The `approveCompletion` trust model (build prompt §8) — the headline simplification
+
+Build prompt §8 requires either **(a)** an attestor/oracle role held by the backend service wallet acting
+only on verified AI decisions meeting the confidence threshold, or **(b)** a time-locked user
+self-attestation fallback — and requires the trust model be documented explicitly. `CommitmentVault.sol`
+implements **(a)** and deliberately omits **(b)**; the contract header (lines 40–65) carries the reasoning
+and points here for the production hardening. That record:
+
+- **What is enforced on-chain (not trusted to the backend).** `approveCompletion` is `onlyAttestor`, requires
+  the commitment to be in `CompletionRequested`, and reverts with `ConfidenceBelowThreshold` unless the
+  supplied `confidence` meets the `confidenceThreshold` the depositor **fixed write-once at creation** (I5).
+  So the depositor's own bar for approval cannot be lowered by the attestor after they signed. Crucially,
+  `approveCompletion` **transfers nothing** — it flips the status to `Approved`. Principal and reward then
+  leave only via `releasePrincipal` / `claimReward`, which are **depositor-only, pull-based, one-shot**. No
+  attestor-reachable function moves value (invariant I3).
+- **What is trusted off-chain (the actual simplification).** The contract cannot itself check that
+  "`confidence = 85`" corresponds to a real `RealityCheckEngine` verdict over real evidence — it trusts the
+  attestor to supply an honest confidence and verification hash derived from the AI pipeline. The binding
+  between "the AI verified this milestone at this confidence" and "the attestor called `approveCompletion`
+  with those numbers" lives in **backend code**, not in a cryptographic on-chain proof. The stored
+  `verificationHash` is a fingerprint the chain records but cannot recompute from evidence. This is the
+  "AI proposes, contract enforces" boundary (rule 3) at its thinnest point.
+- **Blast radius if the attestor key is stolen — deliberately bounded.** A compromised attestor can approve a
+  completion that never happened. The _worst_ that unlocks: **that specific depositor** can withdraw **their
+  own** principal early and claim a reward **their own sponsor** funded. It **cannot redirect a single wei to
+  the attacker**, cannot touch any other commitment, and cannot change who receives funds (`depositor` /
+  `rewardFunder` are write-once, I1/I2). A depositor is never trapped even if the attestor vanishes:
+  `cancelCommitment` returns 100% of principal (and the reward to its funder) with **no attestor involvement
+  at all** (I6) — which is also why the (b) self-attestation fallback is omitted, since the only thing it
+  would additionally unlock is paying an _unverified_ reward out of a sponsor's money.
+- **Testnet opsec simplification (cross-ref §2).** On this deployment `owner`, `attestor`, and deployer are
+  the **same** account (`0xae5c…7607`). Money-safe (neither role can move a depositor's funds) but it removes
+  defence-in-depth, and the key appeared in this build transcript so it **must be rotated**.
+- **Production fix.** (1) Make the attestor a **multi-sig or M-of-N threshold** signer rather than a single
+  key. (2) Carry a **per-approval signed verification receipt**: have `approveCompletion` (or a wrapper)
+  require a signature over `{goalId, milestoneId, confidence, evidenceHash, modelVersion}` so the on-chain
+  approval is cryptographically bound to a specific, auditable AI decision — closing the "confidence value is
+  trusted" gap above. (3) Use a **distinct owner** (ideally a multi-sig) separate from the attestor, hold the
+  attestor key only in the backend, and **rotate** it (the contract already exposes `setAttestor`, which
+  cannot block or redirect a withdrawal). (4) Optionally add a **challenge/dispute window** before
+  `Approved` unlocks withdrawals. None of these change the money-safety invariants — they harden _who_ may
+  attest and _how provably_, not _where funds can go_.
+
+### 19.2 Complete simplifications index (every deferral in this repo → its section and production fix)
+
+Consolidated so a reviewer sees the whole surface at once. Each item is documented in full in the linked
+section; nothing here is new scope, and nothing below is a fake presented as working (rule 1).
+
+- **Attestor trust model** — single attestor, off-chain AI→attestor binding, no self-attestation fallback
+  (by design). Fix: threshold attestor + signed verification receipts. → §19.1, §2, §14.
+- **Attestor = owner = deployer on testnet**, and the key was exposed in-transcript. Fix: separate roles,
+  rotate. → §2.
+- **On-chain id back-fill seam.** No indexer step writes `onchainGoalId` / `onchainCommitmentId` back onto a
+  DRAFT row after the depositor broadcasts `registerGoal` / `createCommitment`, so `prepare*` for a
+  not-yet-registered goal honestly returns `{prepared:false, reason}`. Fix: parse the emitted id from the
+  receipt logs on `recordChainTx`. → §17.
+- **No historical event backfill / chain-sync loop.** State is indexed at broadcast time only. Fix: an
+  event-replay reconciler. → §14.
+- **EVM address validation is format-only** (no EIP-55 checksum), though SIWE now supplies real wallet
+  ownership. → §9.
+- **Evidence content hardening deferred** — MIME allowlist + size cap ship; deep content-sniffing, virus
+  scanning, and EXIF/metadata scrubbing do not. Fix: add these at the upload boundary. → §13.
+- **Only the local-disk storage driver ships.** Fix: an S3/Supabase driver behind the same
+  `EvidenceStorage` interface. → §13.
+- **`/verify` "Connect data" tab is a disabled preview** (GitHub / fitness / reading connectors); written
+  note + file upload are fully real. Fix: OAuth-backed evidence sources through the same pipeline. → §17.
+- **Lock button gates on `status`, not a per-commitment locked flag** (a double-lock is still safe — it
+  reverts on-chain). Fix: add a locked-state field derived from the indexed `LOCK_FUNDS` tx. → §17.
+- **Loaders do per-goal follow-up reads (N+1).** Correct and wallet-scoped, not batched. Fix: a grouped
+  query / DataLoader. → §16.
+- **No dedicated achievements-catalog table** — thresholds are derived live in `deriveAchievements`, with no
+  persisted earned-at. The derivation is real. Fix: a catalog table + persisted crossing timestamps. → §16.
+- **`ScriptedProvider` / gated tests.** The live AI, DB integration, live-chain, and deployed-vault tests are
+  key-/DB-/network-gated and skip cleanly in this sandbox (§8); they are not fakes — the always-on suites
+  prove the logic and the gated ones run on a configured host. → §8, §10, §14, §18.
+- **Gemini SDK + free-tier privacy.** Uses the current `@google/genai` (not the frozen legacy SDK the spec
+  pinned) entirely behind the `AIProvider` boundary; on the free tier prompts may train Google's models, so
+  raw evidence is never sent (only hashes anchored). Fix: paid tier / self-hosted inference. → §10.
+- **Sandbox/tooling caveats (environment, not repo defects):** Turbopack can't build in this PRoot sandbox
+  so `dev`/`build` pass `--webpack` (§7); RainbowKit's unused Coinbase x402 peer deps are aliased to an empty
+  module (§15); benign wallet-stack optional-dependency build warnings are left visible rather than silenced
+  (§15). `SESSION_PASSWORD` (≥32 chars) has no weak fallback — the app refuses to start without it (§4).
+- **Lovable editor round-trip is intentionally broken** by the Next.js migration (owner-approved). → §5.
+
+**Nothing is silently cut.** Every item above ships a real underlying interface/schema; the gap is the
+hardening or optimisation on top, recorded here with its fix per rule 6. The money-safety invariants
+(rules 2–3) hold across all of them: no code path lets funds be seized, redirected, or moved without the
+depositor's own signature, and neither the AI nor the backend holds a key that can move value.
