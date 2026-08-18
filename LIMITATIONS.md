@@ -3,8 +3,9 @@
 Honest record of what is **not** yet real in this repo, per `CLAUDE.md` rules 1 and 6.
 Each entry states what exists today, why, and what the production fix is.
 
-Current build-sequence position: **steps 1–11 of `CommitAI-Build-Prompt.md` §14 are complete; only step 12
-(the §15 end-to-end demo script) remains.** The record below is layered by step and read chronologically —
+Current build-sequence position: **all 12 steps of `CommitAI-Build-Prompt.md` §14 are complete.** What
+remains is operational and the user's to do — rotate the three exposed secrets, push, and run the live
+end-to-end demo (`DEMO.md`). The record below is layered by step and read chronologically —
 later sections supersede earlier "outstanding" notes. Step 8 adds the viem
 `CommitmentVault` client (`apps/web/lib/chain/`), the `ChainTransaction` indexer
 (`repositories/chainTx.ts`), and the chain-aware tools registered safely
@@ -25,10 +26,12 @@ the live-gated vault read now runs against it and passes (see §2 and §14). **S
 build step 10 have landed** — the SIWE + iron-session + CSRF/origin auth foundation (§4, §15), the real
 read wiring that deletes the placeholder data surface (§16), the write / AI / prepare-sign-record flows
 that rebuild every action screen on real backend calls (§17), and the §13 security-test suite that drives
-the real HTTP/auth/upload boundary (§18 = build step 10). **Build step 11 has now landed** — the final
-completeness pass that documents the `approveCompletion` trust model in full and consolidates every
-hackathon-scale simplification with its production fix into one index (§19). Only step 12 of
-`CommitAI-Build-Prompt.md` §14 (the §15 end-to-end demo script) is outstanding.
+the real HTTP/auth/upload boundary (§18 = build step 10). **Build step 11** documented the
+`approveCompletion` trust model in full and consolidated every hackathon-scale simplification with its
+production fix into one index (§19). **Build step 12 has now landed** — the §15 judge-facing end-to-end
+demo runbook (`DEMO.md`, §20). **All twelve steps of `CommitAI-Build-Prompt.md` §14 are complete**; what
+remains is operational and the user's to do — rotate the three exposed secrets, push, and perform the live
+end-to-end run.
 
 ---
 
@@ -971,3 +974,28 @@ section; nothing here is new scope, and nothing below is a fake presented as wor
 hardening or optimisation on top, recorded here with its fix per rule 6. The money-safety invariants
 (rules 2–3) hold across all of them: no code path lets funds be seized, redirected, or moved without the
 depositor's own signature, and neither the AI nor the backend holds a key that can move value.
+
+## 20. Step 12 — §15 end-to-end demo script (`DEMO.md`)
+
+**Status:** done — the final step of the build sequence. `DEMO.md` is the judge-facing runbook for build
+prompt §15, run against the **real deployed app**: SIWE wallet auth, real Postgres, real Gemini
+conversations, and real BOT Chain testnet transactions the depositor's own wallet signs. It adds no runtime
+code and fabricates no output — every hash a judge sees is whatever the depositor's wallet actually returns.
+
+- **What it contains.** Prerequisites (rotated secrets → `apps/web/.env`, `docker compose` Postgres +
+  migrate, a funded testnet wallet, `pnpm --filter web dev`); a **no-key preflight** that reuses the shipped
+  `contractClient.integration` live-read to prove the deployed vault is reachable (asserts chain id 968 and
+  reads a numeric commitment status — moves nothing, skips with a printed reason when the RPC is
+  unreachable); the **six §15 beats**, each mapped to its real DB/Gemini/testnet path and to the
+  prepare → sign → record money-safety spine; a limitations cross-reference; and honest failure modes.
+- **The one honest scope point — the live run is human-driven.** Beats 3 (create/lock commitment) and 5
+  (withdraw principal / claim reward) require a **real wallet signature**. Per money-safety rule 3 the
+  backend holds no fund-moving key, and putting one in a test harness would violate that rule — so those
+  beats are signed in a browser wallet by a person, and a fully-automated **Playwright** run of the _signed_
+  path is deliberately **not** shipped. The always-on suites plus the gated live-read already prove the
+  logic and the deployed contract; what is not automated is the wallet signature itself, by design.
+  → §8, §19.1, §19.2.
+- **What remains after this step is not code.** The build sequence (§14 steps 1–12) is complete. The
+  outstanding items are operational and the user's to perform: rotate the three exposed secrets (GitHub PAT,
+  attestor/deployer key, Gemini key), push, and perform the live end-to-end run with a funded wallet, a
+  Gemini key, and a running database — none of which exist in this sandbox.
