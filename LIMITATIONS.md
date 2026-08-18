@@ -798,6 +798,13 @@ confirmation", "no hardcoded script anywhere", "never fake calldata", "a real cr
 
 ## 18. Step 10 — §13 security-test suite (the HTTP / auth / upload boundary)
 
+> **Authoritative §13 closeout:** [`SECURITY.md`](./SECURITY.md) maps all 13 checklist items → named
+> test(s) → **run status this session** → reproduce command, across the on-chain [F], HTTP-boundary [H],
+> and backend-primitive [L] layers. It is the "must all pass before calling this done" record; this section
+> is the design narrative behind it. Re-run confirmation (2026-08-18): the contract layer that item 3–9 rely
+> on was executed live — `forge test` → **42 passed / 0 failed / 0 skipped** (Foundry v1.7.1 installed this
+> session, §8) — so those items are now _run_, not merely _cited_.
+
 **Status:** real and verified in-sandbox. `pnpm --filter web typecheck`, `lint`, and `pnpm format:check`
 are clean; `pnpm --filter web test` runs **243 always-on tests green across 43 files** (50 DB-/key-/chain-
 gated tests skip cleanly, §8); the new suite alone is **41 always-on green + 5 DB-gated skipped**; `pnpm
