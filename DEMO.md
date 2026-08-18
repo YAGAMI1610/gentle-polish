@@ -88,6 +88,10 @@ printed reason** rather than faking a result:
 pnpm --filter web test contractClient.integration
 ```
 
+_Verified live on 2026-08-18: this read **passed** (2 tests) against the deployed vault — chain id 968 and a
+real commitment status returned. Re-run it yourself before presenting; it skips with a printed reason if the
+RPC is down._
+
 - Deployed `CommitmentVault`: `0x0076c4269be298429af7827a2a5cc40a65f8f8a8`
   → https://scan.bohr.life/address/0x0076c4269be298429af7827a2a5cc40a65f8f8a8
 - Recorded deploy tx: `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`
