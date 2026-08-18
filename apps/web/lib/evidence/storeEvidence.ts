@@ -119,9 +119,20 @@ export async function readEvidenceBlob(
 }
 
 function assertAllowedMime(mimeType: string | undefined): void {
-  if (mimeType === undefined) return; // opaque bytes are allowed
+  if (!isAllowedEvidenceMime(mimeType)) {
+    throw new Error(`evidence MIME type not allowed: ${mimeType}`);
+  }
+}
+
+/**
+ * True when a MIME type is acceptable for binary evidence (undefined = opaque
+ * bytes, allowed). Exported so the HTTP upload boundary can reject a disallowed
+ * type with a 415 BEFORE calling `storeEvidence`, reusing this one allowlist
+ * instead of duplicating it. `storeEvidence` still enforces it internally.
+ */
+export function isAllowedEvidenceMime(mimeType: string | undefined): boolean {
+  if (mimeType === undefined) return true; // opaque bytes are allowed
   const mt = mimeType.toLowerCase();
-  if (ALLOWED_MIME_EXACT.has(mt)) return;
-  if (ALLOWED_MIME_PREFIXES.some((p) => mt.startsWith(p))) return;
-  throw new Error(`evidence MIME type not allowed: ${mimeType}`);
+  if (ALLOWED_MIME_EXACT.has(mt)) return true;
+  return ALLOWED_MIME_PREFIXES.some((p) => mt.startsWith(p));
 }

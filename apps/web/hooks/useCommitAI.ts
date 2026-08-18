@@ -12,11 +12,22 @@
  * types now live in `@/lib/types/view` (re-exported here so component imports are
  * unchanged) and the rows come from Prisma via the serializers.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ApiError, apiGet } from "@/lib/api/client";
+import { ApiError, apiGet, apiPost, apiPostForm } from "@/lib/api/client";
 import { explorerTxUrl } from "@/lib/chain/botchain";
 import { useSession } from "@/hooks/useSession";
+import type {
+  AiTurnRequest,
+  AiTurnResponse,
+  CheckInResult,
+  CreateCheckInRequest,
+  CreateGoalRequest,
+  EvidenceResult,
+  PrepareCommitmentRequest,
+  PrepareCommitmentResult,
+  PrepareSignResult,
+} from "@/lib/api/dto";
 import type {
   Achievement,
   ActivityEvent,
@@ -119,6 +130,104 @@ export function useWalletProfile() {
     queryKey: ["wallet-profile", address],
     enabled: Boolean(address),
     queryFn: () => apiGet<WalletProfile>("/api/profile"),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Write hooks (build step 9, phase 3)
+//
+// Mutations over the real write routes. None of them can move funds: the AI turn
+// only ever proposes prepare-only calldata, and the `prepare*` hooks return
+// unsigned calldata for `useChainTx` to have the USER's wallet sign. Cache is
+// invalidated on success so the read hooks above reflect the new state.
+// ---------------------------------------------------------------------------
+
+/** One turn of the real Gemini conversation (powers /create and /check-in). */
+export function useAiTurn() {
+  return useMutation<AiTurnResponse, Error, AiTurnRequest>({
+    mutationFn: (body) => apiPost<AiTurnResponse>("/api/ai/turn", body),
+  });
+}
+
+/** Create a goal, then refresh the goal list. */
+export function useCreateGoal() {
+  const queryClient = useQueryClient();
+  return useMutation<Goal, Error, CreateGoalRequest>({
+    mutationFn: (body) => apiPost<Goal>("/api/goals", body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["goals"] });
+    },
+  });
+}
+
+/** Record a progress check-in against a goal. */
+export function useCreateCheckIn() {
+  const queryClient = useQueryClient();
+  return useMutation<CheckInResult, Error, CreateCheckInRequest>({
+    mutationFn: (body) => apiPost<CheckInResult>("/api/checkins", body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["goals"] });
+      void queryClient.invalidateQueries({ queryKey: ["activity"] });
+    },
+  });
+}
+
+/** Multipart evidence upload — either a binary `file` or a text `contentText`. */
+export interface UploadEvidenceInput {
+  goalId: string;
+  /** EvidenceType enum value: TEXT | PHOTO | SCREENSHOT | FILE | CONNECTED_TRACKER | GITHUB | TRANSACTION_DATA. */
+  type: string;
+  file?: File;
+  contentText?: string;
+  checkInId?: string;
+  mimeType?: string;
+  fileName?: string;
+}
+
+export function useUploadEvidence() {
+  const queryClient = useQueryClient();
+  return useMutation<EvidenceResult, Error, UploadEvidenceInput>({
+    mutationFn: (input) => {
+      const form = new FormData();
+      form.set("goalId", input.goalId);
+      form.set("type", input.type);
+      if (input.file) form.set("file", input.file);
+      if (input.contentText !== undefined) form.set("contentText", input.contentText);
+      if (input.checkInId !== undefined) form.set("checkInId", input.checkInId);
+      if (input.mimeType !== undefined) form.set("mimeType", input.mimeType);
+      if (input.fileName !== undefined) form.set("fileName", input.fileName);
+      return apiPostForm<EvidenceResult>("/api/evidence", form);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["goals"] });
+    },
+  });
+}
+
+/** Save draft commitment terms + get `createCommitment` calldata (prepare-only). */
+export function usePrepareCommitment() {
+  const queryClient = useQueryClient();
+  return useMutation<PrepareCommitmentResult, Error, PrepareCommitmentRequest>({
+    mutationFn: (body) => apiPost<PrepareCommitmentResult>("/api/commitments", body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["commitments"] });
+    },
+  });
+}
+
+/** Get `lockFunds` calldata for a commitment (prepare-only; user signs via useChainTx). */
+export function usePrepareLock() {
+  return useMutation<PrepareSignResult, Error, string>({
+    mutationFn: (commitmentId) =>
+      apiPost<PrepareSignResult>(`/api/commitments/${commitmentId}/prepare-lock`),
+  });
+}
+
+/** Get `claimReward` calldata for a commitment (prepare-only; user signs via useChainTx). */
+export function usePrepareClaim() {
+  return useMutation<PrepareSignResult, Error, string>({
+    mutationFn: (commitmentId) =>
+      apiPost<PrepareSignResult>(`/api/commitments/${commitmentId}/prepare-claim`),
   });
 }
 

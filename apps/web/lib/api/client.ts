@@ -46,3 +46,50 @@ export async function apiGet<T>(path: string): Promise<T> {
   }
   return (await res.json()) as T;
 }
+
+/**
+ * Send a state-changing JSON request (POST/PUT/PATCH/DELETE) and parse the JSON
+ * reply. `credentials: "include"` sends the session cookie; the browser sets the
+ * `Origin` header the server's same-origin check validates — that is the CSRF
+ * defence, so (as with `apiGet`) there is no bespoke CSRF token here. Throws a
+ * typed `ApiError` so callers can branch on 401/403/413/415/503.
+ */
+export async function apiSend<T>(
+  path: string,
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
+  body?: unknown,
+): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    credentials: "include",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, await readError(res));
+  }
+  return (await res.json()) as T;
+}
+
+/** POST a JSON body and parse the JSON reply (thin wrapper over `apiSend`). */
+export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  return apiSend<T>(path, "POST", body);
+}
+
+/**
+ * POST a `multipart/form-data` body (evidence upload). We deliberately do NOT set
+ * `Content-Type` — the browser adds it with the correct multipart boundary. Same
+ * cookie + same-origin defence as the JSON senders.
+ */
+export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+    body: form,
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, await readError(res));
+  }
+  return (await res.json()) as T;
+}

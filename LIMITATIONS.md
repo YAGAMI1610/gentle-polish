@@ -19,18 +19,21 @@ and the DB-gated handler tests are gated on a key / a reachable Postgres (§8), 
 missing code. The **live testnet deploy is now done**: `CommitmentVault` is deployed at
 `0x0076c4269be298429af7827a2a5cc40a65f8f8a8` (deploy tx
 `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`), recorded in `README.md`, and
-the live-gated vault read now runs against it and passes (see §2 and §14). **Step 9 (phases 1–2 of 4) have landed** — the SIWE + iron-session + CSRF/origin auth foundation (§4, §15) and the real read
-wiring that deletes the placeholder data surface (§16); step 9 phases 3–4 and steps 10–12 of
-`CommitAI-Build-Prompt.md` §14 are outstanding.
+the live-gated vault read now runs against it and passes (see §2 and §14). **Step 9 (phases 1–3 of 4) have landed** — the SIWE + iron-session + CSRF/origin auth foundation (§4, §15), the real read
+wiring that deletes the placeholder data surface (§16), and the write / AI / prepare-sign-record
+flows that rebuild every action screen on real backend calls (§17). Step 9 phase 4 (the §13
+security-test suite = build step 10) and steps 11–12 of `CommitAI-Build-Prompt.md` §14 are
+outstanding.
 
 ---
 
-## 1. Frontend data — real for reads as of step 9 (phase 2); write/AI flows still UI-only
+## 1. Frontend data — real end-to-end as of step 9 (phase 3)
 
-**Status:** the placeholder data surface is **gone**. This section previously documented
-`IS_DEMO_DATA=true`, a `<DemoBadge />` on every screen, and a "Frontend preview…" footer;
-phase 2 removed all of it. `apps/web/lib/demo-data.ts` is **deleted**, and every read screen
-now renders the authenticated wallet's real Prisma data through the `/api/*` GET routes (§16).
+**Status:** the placeholder data surface is **gone**, and as of phase 3 the action screens are real
+too. This section previously documented `IS_DEMO_DATA=true`, a `<DemoBadge />` on every screen, and a
+"Frontend preview…" footer; phase 2 removed the read surface and phase 3 removed the last UI-only
+markers. `apps/web/lib/demo-data.ts` is **deleted**, `components/commitai/DemoBadge.tsx` is
+**deleted**, and every screen — read and write alike — now talks to the real backend.
 
 The 11 view types moved verbatim to `apps/web/lib/types/view.ts`; `hooks/useCommitAI.ts`
 re-exports them, so no component import changed. Removed with the mock surface: the
@@ -40,13 +43,16 @@ Dashboard's hardcoded hero ("Sunday, 16 August", "Three goals in motion") and it
 month" sparkline. Every placeholder `0x…0000` explorer link is gone — explorer links now
 render only when a real broadcast `txHash` exists (rule 1).
 
-**Still honestly UI-only until phase 3** (each still carries a `<UiOnlyNote>`/`<DemoBadge>` so
-the state is visible, not hidden): the three action screens that need the write/AI/signing seam
-— `/create` (`CreateGoal`), `/check-in` (`CheckIn`), `/verify` (`VerifyPage`) — and the
-`CreateCommitmentFlow` step-through on `/commitments`, which still shows a labelled "mock
-confirmation" and a `0x…0000` pattern. These are rebuilt on real flows in phase 3, when
-`components/commitai/DemoBadge.tsx` is deleted. This staging is the approved plan, not a silent
-gap; the residual grep hits it produces are enumerated in §16.
+**Now real as of phase 3 (§17):** the five action screens are rebuilt on real flows — `/create`
+(`CreateGoal`: live Gemini turn + `POST /api/goals`), `/check-in` (`CheckIn`: live turn + a durable
+`POST /api/checkins` note, confidence read from the real `VerificationRecord`, no more literal
+`ConfidenceMeter value={89}`), `/verify` (`VerifyPage`: real `POST /api/evidence` upload), and the
+`CreateCommitmentFlow` + Lock/Claim actions on `/commitments` and `/rewards` (prepare → the user's
+own wallet signs → the real broadcast hash is recorded via `POST /api/chain/record`). The labelled
+"mock confirmation" and the `0x…0000` pattern on `CreateCommitmentFlow` are **gone**. Two honest
+residuals remain, both documented in §17: the `/verify` "Connect data" tab is a disabled preview of
+future connectors (written note + file upload are fully real), and the Lock button gates on
+`status==="active"` rather than a per-commitment locked flag the view type doesn't yet carry.
 
 ## 2. Smart contract: built, tested, and deployed to BOT Chain testnet
 
@@ -82,11 +88,11 @@ multisig), a separate attestor key held only by the backend, and rotate the atte
 deployer/attestor key and the API keys shared during this build session appeared in chat and
 **must be rotated** before any non-throwaway use.
 
-The frontend still shows placeholder chain data (see §1); wiring the deployed address into the
-app UI is part of step 9. The explorer helpers resolve to `https://scan.bohr.life` — the
-non-resolving `.test` domain noted here previously is fixed in `lib/chain/botchain.ts`
-(`explorerTxUrl` / `explorerAddressUrl`). The tx hash recorded above is real and
-explorer-verified (rule 1). The backend contract client that consumes the deployed address is
+The frontend now consumes the deployed vault through the real prepare-sign-record flows wired in
+step 9 phase 3 (see §1, §17) — no placeholder chain data remains. The explorer helpers resolve to
+`https://scan.bohr.life` — the non-resolving `.test` domain noted here previously is fixed in
+`lib/chain/botchain.ts` (`explorerTxUrl` / `explorerAddressUrl`). The tx hash recorded above is real
+and explorer-verified (rule 1). The backend contract client that consumes the deployed address is
 itself built and tested, and its live chain reads work — see §14.
 
 **How to (re)deploy your own instance (needs a funded key — never paste one in-transcript):**
@@ -625,13 +631,13 @@ left in place rather than silenced by aliasing them away, because their runtime 
 can't be verified in this browserless sandbox and silencing an unverifiable warning in a
 money-handling app is the worse trade.
 
-**Outstanding (the approved 4-phase plan):** phase 2 is now done — it wired the GET read routes +
-serializers and **deleted `lib/demo-data.ts`**, retiring the placeholder surface of §1 (see §16);
-phase 3 adds the write/AI/prepare-sign-record flows; phase 4 is the §13 security-test suite (build
-step 10). The step-9 "no mock data left anywhere" grep gate is fully satisfied at the end of phase
-3 — after phase 2 the only residual source hits are the labelled `CreateCommitmentFlow` "mock
-confirmation" (owned by phase 3) and rule-1 honesty comments in `lib/**` (each a "no fake" / "not
-configured" guarantee, not a fake), enumerated in §16.
+**Outstanding (the approved 4-phase plan):** phases 2 and 3 are now done — phase 2 wired the GET
+read routes + serializers and **deleted `lib/demo-data.ts`** (§16), and phase 3 added the
+write/AI/prepare-sign-record flows and **deleted `components/commitai/DemoBadge.tsx`** (§17). Phase 4
+is the §13 security-test suite (build step 10). The step-9 "no mock data left anywhere" grep gate is
+now fully satisfied: after phase 3 the only residual source hits are rule-1 honesty comments in
+`lib/**` and the screen files (each a "no fake" / "not configured" / "no hardcoded script" guarantee,
+not a fake), enumerated in §17.
 
 ## 16. Step 9 (phase 2) — read wiring: real backend reads, placeholder surface deleted
 
@@ -697,4 +703,87 @@ in `lib/**` that use the words "fake"/"mock"/"hardcoded" only to state the code 
 - **Cross-wallet non-leak is proven at the serializer/repository layer** (§9) and enforced by the
   wallet-scoped repositories the loaders call. End-to-end HTTP-boundary tests (A's session reading
   B's row → 404) are the **phase 4 / step 10** §13 suite; they are DB-gated (§8).
-- **Write/AI screens stay UI-only until phase 3** — see §1.
+- **Write/AI screens landed in phase 3** — the read screens documented here were joined by the real
+  action screens in phase 3 (§17); §1 now describes the whole frontend as real end-to-end.
+
+## 17. Step 9 (phase 3) — write / AI / prepare-sign-record flows
+
+**Status:** real and verified in-sandbox. `pnpm --filter web typecheck`, `lint`, and `pnpm
+format:check` are clean; `pnpm --filter web test` runs **202 always-on tests green** (45 DB-/key-/
+chain-gated tests skip cleanly, §8); `pnpm --filter web build` (`--webpack`, §7) compiles every new
+route and the rebuilt screens (exit 0). This is **phase 3 of 4** for build step 9; phase 4 (the §13
+security-test suite = build step 10) is the only remaining step-9/10 work.
+
+**What exists and is real:**
+
+- **Write routes** (POST, each `requireWallet()` + `assertSameOrigin`, every throw funnelled through
+  `toHttpError` so `UnauthorizedError`→401 / origin fail→403 / `WalletScopeError`→403 / `ZodError`→400):
+  - `app/api/ai/turn/route.ts` — a live `runTurn({provider: geminiFromEnv(), walletAddress, userMessage,
+history, toolPolicy?})` round (`lib/ai/runner.ts`); `!geminiConfigured()` → an honest **503**, never
+    a scripted reply (rule 1). Powers `/create` and `/check-in`.
+  - `app/api/goals/route.ts` POST — `createGoal(wallet, …)`. `app/api/checkins/route.ts` POST —
+    `createCheckIn(wallet, …)` (a durable `CheckIn` row; no AI tool creates one, so this duplicates
+    nothing).
+  - `app/api/evidence/route.ts` POST — `storeEvidence(wallet, …)`, mapping its throws to **413**
+    (over `MAX_EVIDENCE_BYTES` = 15MB) / **415** (MIME not on the allowlist). `evidence/[id]/route.ts`
+    GET — `readEvidenceBlob` → bytes or **404** (cross-wallet non-leak). This is the §11 public upload
+    entry point, SIWE-scoped because evidence is wallet-owned.
+  - **Commitment prepare-only (never broadcast):** `commitments/route.ts` POST →
+    `createDraftCommitment(wallet, …)` (off-chain DRAFT) **+** `prepareCreateCommitment` calldata;
+    `commitments/[id]/prepare-lock` → `prepareLockFunds` (value = principalWei); `commitments/[id]/
+prepare-claim` → `prepareClaimReward`. `chain/record/route.ts` POST → `recordChainTx(wallet, …)`,
+    called by the client **only after** the wallet returns a real hash.
+- **Client signing seam** — `hooks/useChainTx.ts` is the single money-moving path: it takes a
+  `PreparedTxDto` from a `prepare*` response, then `switchChain` → `sendTransaction` (the **user's**
+  wagmi wallet signs) → `waitForTransactionReceipt` → `POST /api/chain/record` with the REAL mined
+  hash. The backend never sees a private key for any of this.
+- **Rebuilt screens** (all on real hooks; §1): `CreateGoal`, `CheckIn`, `CommitmentsPage` /
+  `CreateCommitmentFlow`, `RewardsPage`, `VerifyPage`. `components/commitai/DemoBadge.tsx` is deleted.
+
+**Money-safety guarantee (rules 2–3), preserved end-to-end:** every fund action is prepare-only —
+the route returns unsigned `{chainId, to, data, value}` calldata to the browser and the depositor's
+own wallet signs it. No route instantiates a fund-signing client, and `getAttestorClient()`'s frozen
+4-method surface (none of which move value) is the only key the backend holds (§14, proved in
+`contractClient.safety.test.ts`). When the chain isn't configured or a goal isn't on-chain yet, the
+`prepare*` routes return an honest `{prepared:false, reason}` and the UI shows that reason — never a
+fabricated hash or a "mock confirmation" (rule 1).
+
+**Untrusted input (rule 5):** check-in and chat messages reach `runTurn` as the user message, which
+the runner wraps server-side; evidence text/files flow through `storeEvidence`, stored byte-for-byte
+as opaque data (§13). The `toolPolicy` string that `/check-in` sends is routing context authored by
+the app (it names the selected goal), not user text, and is appended as a system-instruction addendum
+— it never carries raw user input into an instruction position.
+
+**Honest deferrals (rules 1 & 6 — real interface now, gap recorded here):**
+
+- **On-chain-id back-fill seam.** No route yet back-fills `onchainGoalId` / `onchainCommitmentId`
+  onto a DRAFT row after the depositor broadcasts `registerGoal` / `createCommitment`. So for an
+  app-created goal that has not been registered on-chain, `prepareCreateCommitment` /
+  `prepareLockFunds` / `prepareClaimReward` honestly return `{prepared:false, reason}` (the calldata
+  needs the real on-chain id), and the UI surfaces that reason. The production fix is a small indexer
+  step: on `recordChainTx` for a `REGISTER_GOAL` / `CREATE_COMMITMENT` kind, parse the emitted id from
+  the receipt logs and write it back onto the row. Recorded, not silently dropped.
+- **`/verify` "Connect data" tab is a disabled preview.** Automatic connectors (GitHub / fitness /
+  reading-app) are shown disabled with a note pointing here; the written-note and file-upload tabs are
+  fully real (`POST /api/evidence`). Production fix: implement each connector as an OAuth-backed
+  evidence source that writes real `Evidence` rows through the same pipeline.
+- **Lock button gates on `status`, not a per-commitment locked flag.** The `Commitment` view type
+  carries no "funds already locked on-chain" boolean, so the Lock action is shown while
+  `status==="active"` and hidden once this session records a lock. A double-lock attempt is still
+  safe — it reverts on-chain and the backend signs nothing — but the button can't perfectly pre-gate
+  it. Production fix: add a locked-state field to the commitment view (derived from the indexed
+  `LOCK_FUNDS` `ChainTransaction`) and gate on it.
+
+**How the tests are gated (this phase):** always-on route tests drive the auth/origin/error mapping
+and the `storeEvidence` 413/415 mapping through the real mapper without a DB; the prepare-only proof
+asserts a POST to `/api/commitments` returns calldata + a DRAFT and broadcasts nothing, and that
+`/api/chain/record` only stores a supplied real hash (never invents one). DB-/key-/chain-gated
+happy-paths skip cleanly (§8). The full §13 HTTP-boundary security matrix is phase 4.
+
+**Grep-gate state after this phase** (`grep -rn "mock\|fake\|TODO: real\|hardcoded\|demo-data\|
+example-botchain" apps/web`, excluding `node_modules`/tests): `demo-data`, `example-botchain`, the
+`CreateCommitmentFlow` "mock confirmation", the `0x…0000` placeholders, and `ConfidenceMeter
+value={89}` are **all gone** from source. Every remaining hit is a rule-1 honesty comment that uses
+"fake"/"mock"/"hardcoded" only to state the code does **not** do that (e.g. "instead of a mock
+confirmation", "no hardcoded script anywhere", "never fake calldata", "a real cryptographic check
+(no mock)").
