@@ -19,11 +19,12 @@ and the DB-gated handler tests are gated on a key / a reachable Postgres (§8), 
 missing code. The **live testnet deploy is now done**: `CommitmentVault` is deployed at
 `0x0076c4269be298429af7827a2a5cc40a65f8f8a8` (deploy tx
 `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`), recorded in `README.md`, and
-the live-gated vault read now runs against it and passes (see §2 and §14). **Step 9 (phases 1–3 of 4) have landed** — the SIWE + iron-session + CSRF/origin auth foundation (§4, §15), the real read
-wiring that deletes the placeholder data surface (§16), and the write / AI / prepare-sign-record
-flows that rebuild every action screen on real backend calls (§17). Step 9 phase 4 (the §13
-security-test suite = build step 10) and steps 11–12 of `CommitAI-Build-Prompt.md` §14 are
-outstanding.
+the live-gated vault read now runs against it and passes (see §2 and §14). **Step 9 (all 4 phases) and
+build step 10 have landed** — the SIWE + iron-session + CSRF/origin auth foundation (§4, §15), the real
+read wiring that deletes the placeholder data surface (§16), the write / AI / prepare-sign-record flows
+that rebuild every action screen on real backend calls (§17), and the §13 security-test suite that drives
+the real HTTP/auth/upload boundary (§18 = build step 10). Steps 11–12 of `CommitAI-Build-Prompt.md` §14
+(the final LIMITATIONS completeness pass and the §15 end-to-end demo script) are the only outstanding work.
 
 ---
 
@@ -787,3 +788,86 @@ value={89}` are **all gone** from source. Every remaining hit is a rule-1 honest
 "fake"/"mock"/"hardcoded" only to state the code does **not** do that (e.g. "instead of a mock
 confirmation", "no hardcoded script anywhere", "never fake calldata", "a real cryptographic check
 (no mock)").
+
+## 18. Step 10 — §13 security-test suite (the HTTP / auth / upload boundary)
+
+**Status:** real and verified in-sandbox. `pnpm --filter web typecheck`, `lint`, and `pnpm format:check`
+are clean; `pnpm --filter web test` runs **243 always-on tests green across 43 files** (50 DB-/key-/chain-
+gated tests skip cleanly, §8); the new suite alone is **41 always-on green + 5 DB-gated skipped**; `pnpm
+--filter web build` (`--webpack`, §7) still exits 0 (the `.test.ts` file is not a route — no `/api/security`
+endpoint is emitted). This is **phase 4 of 4** for build step 9 and completes build step 10; only steps
+11–12 of §14 remain.
+
+**What exists and is real** — `apps/web/app/api/security.test.ts`, one `describe` per §13 checklist item.
+Its headline value is the layer that had **no** tests before: the HTTP boundary. It drives the **real** Next
+route handlers with real `Request` objects and asserts the real status codes — **no route logic, auth,
+origin, or upload gate is mocked.** The only seam is `next/headers` `cookies()`, replaced (via `vi.mock`)
+with an in-memory store so a test can present a genuinely `iron-session`-sealed cookie (`sealData` with the
+same password the handler unseals with) or none. Everything after that — `assertSameOrigin`,
+`requireWallet`, the size/MIME gate, `toHttpError`, and the wallet-scoped repositories — is the production
+path. Because 401/403 fire before any DB call and evidence 413/415 fire before `storeEvidence`, the entire
+boundary is testable **always-on** without a Postgres.
+
+**Where each §13 item is proven** (this suite closes the HTTP-boundary gap and cites the authoritative
+lower-layer proof for the invariants that live below the route):
+
+1. **Unauthorized wallet access → 401.** Always-on here: every wallet-scoped route (9 GET + 8 POST) is
+   driven with no session and returns 401. POSTs carry a same-origin `Origin` so they reach `requireWallet`
+   past the origin gate; GETs reach it immediately.
+2. **Cross-wallet data access → 404 read / 403 write (non-leak).** DB-gated here (`describe.skipIf(!dbReady)`):
+   wallet A creates a goal + draft commitment; B reading A's goal/commitment → 404 (existence never
+   revealed), B writing a check-in against A's goal → 403 (`WalletScopeError`), B's prepare-lock on A's
+   commitment → 404. Skips cleanly with a printed reason when no Postgres is up; the repository-layer proof
+   is always-on in §9.
+3. **Contract access-control / reentrancy / invalid-completion / changed-conditions / duplicate-completion.**
+   Enforced **on-chain** — the authoritative proof is the 42 Foundry tests in `contracts/` (§2). Re-asserted
+   here always-on: `getAttestorClient()` exposes exactly the four value-neutral methods, is frozen, and has
+   no fund-moving method reachable.
+4. **Unauthorized reward claim / withdrawal.** Always-on: `prepareClaimReward` returns UNSIGNED calldata
+   whose `to` is the vault, `value` is 0, and whose object carries **only** `{chainId,to,data,value}` — no
+   signature/raw-tx field the backend could broadcast; only the depositor's own `lockFunds` carries value.
+   The fuller encoder/decoder proof is `contractClient.safety.test.ts` (§14).
+5. **Replayed / forged SIWE verification → 401.** Always-on here at the **route**: `POST /api/auth/verify`
+   with a session carrying no nonce → 401 ("no sign-in in progress"), and with a nonce but a
+   non-verifying message/signature → 401 (and a failed verify never reaches `ensureWallet`, so no DB write).
+   The EIP-191 crypto itself (replay under a different nonce, domain mismatch, tampered/spoofed signature) is
+   proven always-on in `lib/auth/siwe.test.ts` (§4).
+6. **Malicious evidence upload → 413 / 415.** Always-on here: `POST /api/evidence` with a valid session for
+   a non-multipart body → 415, a disallowed MIME (an `application/x-msdownload` blob) → 415, and a blob one
+   byte over `MAX_EVIDENCE_BYTES` → 413 — all firing before `storeEvidence`. The `fileName` path-escape guard
+   is re-asserted (a `../../etc/passwd` key rejected before touching disk) and proven fully in
+   `lib/storage/localDiskStorage.test.ts` (§13).
+7. **Prompt injection via evidence stays wrapped data.** Always-on re-assertion: `wrapEvidence` keeps a
+   payload strictly inside one `<untrusted-user-evidence>` fence and `neutralizeDelimiters` filters a forged
+   closing tag (any casing/whitespace) so it cannot break into the instruction plane. The behavioural proof
+   (LOW-quality injected evidence never reaches VERIFIED and triggers no tool call) is
+   `lib/ai/tools/antiInjection.test.ts` + `lib/ai/promptGuards.test.ts` (§12).
+8. **AI tool-call abuse is architecturally impossible.** Same frozen, signer-less attestor surface as item 3;
+   every fund action is prepare-only calldata for the user's wallet, and no route instantiates a fund-signing
+   client (§17). Capstone proof: `contractClient.safety.test.ts` (§14).
+
+Also always-on: the CSRF/origin companion to item 1 — every state-changing POST (including `/api/auth/verify`
+and `/api/auth/logout`) is refused with **403** from a cross origin and with a missing `Origin`, and a
+cross-host but allowlisted `APP_ORIGIN` is accepted (it then fails at auth with 401, proving the origin gate
+let it through).
+
+**Honest deferrals (rules 1 & 6 — real coverage now, gap recorded here):**
+
+- **The cross-wallet non-leak matrix (item 2) is DB-gated**, so in this browserless/Postgres-less sandbox it
+  skips rather than runs. It executes against the committed `docker-compose.yml` Postgres (`docker compose up
+-d db` → `pnpm --filter web db:migrate` → `pnpm --filter web test`). The always-on 401/403/413/415 groups
+  need no database and run everywhere.
+- **Contract-invariant coverage lives in two places by design.** The on-chain access-control / reentrancy /
+  duplicate-completion invariants are the `contracts/` Foundry suite (§2); this TypeScript suite re-asserts
+  only the backend-side capability surface (frozen attestor, prepare-only encoders) and cites the Foundry
+  tests rather than re-implementing them.
+- **No dedicated achievements-catalog table** (carried forward from §16): achievement thresholds remain
+  derived in `deriveAchievements`, not stored in a catalog table with persisted earned-at metadata. The
+  derivation is real; the table is the production follow-up. This is orthogonal to §13 but is the one open
+  scope item the security pass did not close.
+
+**Grep-gate state after this phase** (`grep -rniE "mock|fake|TODO: real|hardcoded|demo-data|example-botchain"`
+over `apps/web`, excluding `node_modules`/`.next`): production (non-test) source is unchanged from §17 — every
+hit is a rule-1 honesty comment stating the code does **not** fake. The new test file's only matches are
+`vi.mock("next/headers")` (the cookie-store seam described above) and a comment stating "no route logic is
+mocked" — a test double for the cookie transport, not a fake of any money / AI / chain path.
