@@ -1,5 +1,21 @@
 import type { AIToolCall, ToolSpec } from "../provider";
 import { createGoalTool } from "./createGoal";
+// Build step 5 — remaining DB/AI tools.
+import { getWalletGoalsTool } from "./getWalletGoals";
+import { analyzeGoalTool } from "./analyzeGoal";
+import { createMilestonesTool } from "./createMilestones";
+import { scheduleCheckInTool } from "./scheduleCheckIn";
+import { updateProgressTool } from "./updateProgress";
+import { createVerificationStrategyTool } from "./createVerificationStrategy";
+import { requestEvidenceTool } from "./requestEvidence";
+import { getCommitmentStatusTool } from "./getCommitmentStatus";
+import { calculateAccountabilityScoreTool } from "./calculateAccountabilityScore";
+// Build step 6 — verification engines' tools.
+import { generateVerificationQuestionsTool } from "./generateVerificationQuestions";
+import { evaluateAnswersTool } from "./evaluateAnswers";
+import { analyzeEvidenceTool } from "./analyzeEvidence";
+import { runRealityCheckTool } from "./runRealityCheck";
+import { calculateVerificationConfidenceTool } from "./calculateVerificationConfidence";
 import type { AnyToolDefinition, ToolContext } from "./types";
 
 /**
@@ -10,9 +26,32 @@ import type { AnyToolDefinition, ToolContext } from "./types";
  * handler runs (build-prompt §7): a tool call is never trusted just because the
  * model produced it. Unknown tools and invalid arguments fail closed as an error
  * result rather than throwing — the runner feeds that back to the model.
+ *
+ * NOTE (money safety, CLAUDE.md rules 2–3): no fund-moving tool is registered.
+ * `createCommitment`, `claimReward`, and the on-chain half of `requestCompletion`
+ * are deliberately absent until the contract client (build step 8) so they make
+ * REAL testnet transactions rather than inventing them — see LIMITATIONS.md.
  */
 
-const DEFINITIONS: readonly AnyToolDefinition[] = [createGoalTool];
+const DEFINITIONS: readonly AnyToolDefinition[] = [
+  createGoalTool,
+  // Step 5
+  getWalletGoalsTool,
+  analyzeGoalTool,
+  createMilestonesTool,
+  scheduleCheckInTool,
+  updateProgressTool,
+  createVerificationStrategyTool,
+  requestEvidenceTool,
+  getCommitmentStatusTool,
+  calculateAccountabilityScoreTool,
+  // Step 6
+  generateVerificationQuestionsTool,
+  evaluateAnswersTool,
+  analyzeEvidenceTool,
+  runRealityCheckTool,
+  calculateVerificationConfidenceTool,
+];
 
 const BY_NAME: ReadonlyMap<string, AnyToolDefinition> = new Map(
   DEFINITIONS.map((def) => [def.name, def]),

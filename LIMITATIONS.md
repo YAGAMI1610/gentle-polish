@@ -3,15 +3,18 @@
 Honest record of what is **not** yet real in this repo, per `CLAUDE.md` rules 1 and 6.
 Each entry states what exists today, why, and what the production fix is.
 
-Current build-sequence position: **step 4 core complete** — the SDK-agnostic `AIProvider`
-boundary, the real `GeminiProvider`, the §7 prompt-injection guards, the `createGoal` tool
-wired end-to-end (Zod-validated → wallet-scoped DB write → decision-log audit entry), and the
-bounded agentic runner are all in place, typechecked against the real SDK and unit-tested; see
-§10. Steps 1–3 stand as recorded: the wallet-scoped data layer (§9), the contract + tests
-(§2), and the frontend labelling (§1). Live model calls and the DB-gated end-to-end / handler
-tests are gated on a key / a reachable Postgres (§8), not on any missing code. Step 2's one
-outstanding piece is still the **live testnet deploy tx hash**, which needs a funded deployer
-key (see §2). Steps 5–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
+Current build-sequence position: **steps 5 + 6 complete** — the remaining §4 agent tools
+(§11) and the §6 verification engines + their tools (§12) are in place, typechecked and
+unit-tested. This builds on **step 4** (§10, the SDK-agnostic `AIProvider` boundary, the real
+`GeminiProvider`, the §7 prompt-injection guards, the `createGoal` tool end-to-end, and the
+bounded agentic runner). Steps 1–3 stand as recorded: the wallet-scoped data layer (§9), the
+contract + tests (§2), and the frontend labelling (§1). Live model calls and the DB-gated
+handler tests are gated on a key / a reachable Postgres (§8), not on any missing code. Two
+things are still deliberately deferred and recorded honestly: the **fund/chain tools**
+(`createCommitment`, `claimReward`, on-chain `requestCompletion`) and the **live testnet deploy
+tx hash** both belong to **step 8** and need a funded key / the contract client (see §2, §12).
+The **evidence upload/storage** pipeline is **step 7**. Steps 7–12 of
+`CommitAI-Build-Prompt.md` §14 are outstanding.
 
 ---
 
@@ -232,13 +235,13 @@ is recorded here, not silently cut):
 - **`binaryTargets` defaults to `native`** (arm64 in this environment). A production host on
   a different libc/arch must add its target to the `generator client` block and
   re-generate. This is the reference the comment in `schema.prisma` points at.
-- **The schema is ahead of the repositories, by design.** All 11 models exist, but only
-  `Wallet` / `Goal` / `CheckIn` / `Evidence` have a repository this step.
-  `VerificationStrategy`, `Milestone`, `VerificationRecord`, `Commitment`,
-  `AccountabilityScoreLog`, `DecisionLog` and `ChainTransaction` get their data-access in the
-  steps that use them (verification 4–6, chain indexing 8). Modelling the whole domain now
-  is additive — so later steps need no schema-breaking migration over early data — not a
-  scope cut.
+- **The schema is ahead of the repositories, by design.** As of steps 5–6, ten of the
+  eleven models have a wallet-scoped repository: `Wallet` / `Goal` / `CheckIn` / `Evidence`
+  (step 3), `DecisionLog` (step 4), and `Milestone` / `VerificationStrategy` /
+  `VerificationRecord` / `Commitment` (read-only) / `AccountabilityScoreLog` (steps 5–6).
+  Only `ChainTransaction` still awaits its data-access, which lands with the chain indexer in
+  **step 8**. Modelling the whole domain up front is additive — later steps need no
+  schema-breaking migration over early data — not a scope cut.
 - **Money-shape choices are additive too, not cuts:** wei as `Decimal(78, 0)` (the full
   uint256 range), on-chain ids as `BigInt`, and Reward modelled as a _view_ over a
   Commitment's reward leg (APPROVED + not-withdrawn ⇒ claimable) rather than a separate
@@ -305,3 +308,86 @@ is privacy-focused — raw evidence lives off-chain and only hashes are anchored
 handler or server mutation ships in this step, so §4's rule (no write endpoints before
 CSRF/origin defence + SIWE) is still honoured. The AI holds no key and has no fund-moving path
 (CLAUDE.md rule 3).
+
+## 11. Step 5 — remaining DB/AI agent tools
+
+**Status:** real and verified offline. `pnpm --filter web typecheck` is clean and the
+always-on tests pass; the DB-gated handler tests skip cleanly with printed run instructions
+(§8). No fakes, no fund path.
+
+**What exists and is real** (all clone the step-4 `createGoal` tool shape: hand-authored
+JSON-Schema `parameters` + a Zod `input` schema re-validated at dispatch + a `handler` that
+does a wallet-scoped DB write and a `logDecision` audit entry on any material change):
+
+- **9 tools** in `apps/web/lib/ai/tools/`: `getWalletGoals` (read), `analyzeGoal`,
+  `createMilestones`, `scheduleCheckIn`, `updateProgress`, `createVerificationStrategy`,
+  `requestEvidence`, `getCommitmentStatus` (read), `calculateAccountabilityScore`. All
+  registered in `registry.ts` and exported from `tools/index.ts`.
+- **New wallet-scoped repositories** — `milestones.ts`, `strategy.ts`,
+  `verificationRecords.ts`, `commitments.ts` (**read-only**), `scores.ts`, plus
+  `goals.scheduleCheckIn` / `goals.updateGoalShaping` / `evidence.getEvidence`. `Milestone`
+  and `VerificationStrategy` have no `walletAddress` column, so they are scoped through the
+  parent goal relation (`goal: { walletAddress }`); the isolation guarantee of §9 holds.
+- **Boundary schemas** extended in `lib/db/schemas.ts` for every new tool input.
+
+**Honest deferrals (CLAUDE.md rules 1 & 6 — real interface now, gap recorded here):**
+
+- **`getCommitmentStatus` is read-only and reports "no commitment" for every goal today.**
+  Nothing creates a `Commitment` row this pass — creating/funding/claiming one moves real
+  value and is **step 8** (the contract client + indexer). Per rule 1 no placeholder commitment
+  or tx hash is invented; the tool honestly returns `exists: false`, which its handler test
+  asserts. `updateProgress` records **self-reported** progress only and explicitly does **not**
+  mark anything verified/completed — verification is §12, settlement is step 8.
+- **`calculateAccountabilityScore` is server-computed only (§10).** The score is derived from
+  the wallet's own goals/milestones/verifications/check-ins; there is no client-writable total
+  the model could inflate. `computeAccountabilityScore` folds `walletAddress` into every read.
+
+## 12. Step 6 — verification strategy / reality-check / confidence engines and tools
+
+**Status:** real and verified offline. The engines are pure functions with always-on unit
+tests; `pnpm --filter web typecheck` is clean. The DB-gated tool-handler tests skip cleanly
+without a Postgres (§8). See `VERIFICATION_STRATEGIES.md` for the full behaviour.
+
+**What exists and is real:**
+
+- **5 pure engines** in `apps/web/lib/ai/verification/`: `strategyEngine.ts` (a category
+  _registry_ — not a hardcoded switch — with built-ins for all 8 `GoalCategory` values, each
+  combining ≥2 independent signals), `confidence.ts` (signals → 0–100 → status),
+  `antiGaming.ts` (objective detectors), `realityCheck.ts` (verdict + non-accusatory
+  reasoning + hard gates), `verificationHash.ts` (§6.5 canonical `sha256`). Each has an
+  always-on `*.test.ts`.
+- **5 tools**: `generateVerificationQuestions`, `evaluateAnswers`, `analyzeEvidence`,
+  `runRealityCheck`, `calculateVerificationConfidence` — all registered.
+
+**The reality-check trust model (why it is real, not a fake — CLAUDE.md rule 1):** the engine
+does **not** ask the model "is this verified?" and trust the reply. The verdict is computed
+deterministically from structured signals, `evidenceQuality` is derived from the objective
+evidence **type** (a bare TEXT claim is pinned LOW and can never reach VERIFIED), duplicate
+detection compares content **hashes**, and hard gates over objective facts
+(contradiction / impossible-delta / duplicate) cannot be overridden by optimistic
+model-supplied signals. This is the anti-injection guarantee, proved exhaustively and without a
+DB in `tools/antiInjection.test.ts` (a LOW-evidence matrix over every other signal combination
+never returns VERIFIED) and in the engine's own tests.
+
+**Non-accusatory guarantee (§6.3):** reasoning distinguishes "cannot verify yet" from any
+claim of dishonesty and never uses accusatory vocabulary; asserted by a regex in
+`realityCheck.test.ts` and `antiInjection.test.ts`.
+
+**Honest deferrals (rules 1, 3 & 6):**
+
+- **No completion/fund side effect exists this pass.** `requestCompletion`, `createCommitment`,
+  and `claimReward` are **not registered** — verified in `antiInjection.test.ts`. `analyzeEvidence`
+  writes a `VerificationRecord` with the canonical hash but triggers **no** money path. Anchoring
+  that hash on-chain and any settlement are **step 8** (the contract enforces; the AI proposes).
+- **Signal extraction is intentionally shallow today.** `evaluateAnswers` uses a deterministic
+  generic-answer check (it never produces a HIGH signal from free text, and never a verdict);
+  richer extraction (NLP over answers, EXIF/tracker/transaction parsing to auto-derive
+  plausibility & consistency) is future work. Today the conversational model supplies its read
+  of `plausibility`/`consistency` as advisory signals, while `evidenceQuality` and the hard
+  gates stay objective — so the shallow extraction cannot weaken the injection guarantee.
+- **Evidence storage/upload is step 7.** These tools consume `Evidence` rows (and their
+  `contentHash`) that already exist via the step-3 repository; the upload pipeline that creates
+  them from real files is not part of this pass.
+
+**No write endpoints were added.** Everything here is internal library code behind the same
+boundaries as §10; the AI holds no key and has no fund-moving path (CLAUDE.md rule 3).
