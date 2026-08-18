@@ -1,4 +1,4 @@
-import type { Goal, GoalStatus } from "@prisma/client";
+import type { CheckInFrequency, Goal, GoalStatus } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../client";
 import {
@@ -93,6 +93,53 @@ export async function setGoalStatus(
   const result = await prisma.goal.updateMany({
     where: { id: goalId, walletAddress: addr },
     data: { status },
+  });
+  return result.count;
+}
+
+/**
+ * Set the next check-in time (and optionally the structured cadence) on a goal
+ * this wallet owns. `updateMany` keeps the wallet in the filter so a cross-wallet
+ * call touches zero rows. Returns rows changed (0 if not owned / not found).
+ */
+export async function scheduleCheckIn(
+  walletAddress: string,
+  goalId: string,
+  nextCheckIn: Date,
+  cadence?: CheckInFrequency,
+): Promise<number> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  const data: Prisma.GoalUpdateManyMutationInput = { nextCheckIn };
+  // Conditional assignment (not `?? undefined`) keeps this clean under
+  // exactOptionalPropertyTypes — we never write an explicit undefined.
+  if (cadence !== undefined) {
+    data.checkInCadence = cadence;
+  }
+  const result = await prisma.goal.updateMany({
+    where: { id: goalId, walletAddress: addr },
+    data,
+  });
+  return result.count;
+}
+
+/**
+ * Persist the §5 goal-shaping slots (current state / desired state / success
+ * metric) the AI pinned down. Only the fields provided are written. Wallet-scoped
+ * `updateMany`; returns rows changed (0 if not owned / not found).
+ */
+export async function updateGoalShaping(
+  walletAddress: string,
+  goalId: string,
+  shaping: { currentState?: string; desiredState?: string; successMetric?: string },
+): Promise<number> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  const data: Prisma.GoalUpdateManyMutationInput = {};
+  if (shaping.currentState !== undefined) data.currentState = shaping.currentState;
+  if (shaping.desiredState !== undefined) data.desiredState = shaping.desiredState;
+  if (shaping.successMetric !== undefined) data.successMetric = shaping.successMetric;
+  const result = await prisma.goal.updateMany({
+    where: { id: goalId, walletAddress: addr },
+    data,
   });
   return result.count;
 }

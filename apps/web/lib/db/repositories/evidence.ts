@@ -64,3 +64,15 @@ export async function listEvidence(walletAddress: string, goalId: string): Promi
     orderBy: { createdAt: "desc" },
   });
 }
+
+/**
+ * A single evidence row, but only if this wallet owns it. Returns null otherwise
+ * — a caller can never tell "not yours" apart from "does not exist".
+ */
+export async function getEvidence(
+  walletAddress: string,
+  evidenceId: string,
+): Promise<Evidence | null> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  return prisma.evidence.findFirst({ where: { id: evidenceId, walletAddress: addr } });
+}

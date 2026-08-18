@@ -26,6 +26,10 @@ next-env.d.ts
 .env.local
 .env.*.local
 
+# Evidence storage (local-disk EvidenceStorage driver — off-chain blobs, build step 7).
+# Raw evidence bytes live here in dev; never committed. Prod uses an object store.
+apps/web/.evidence-store/
+
 # Foundry (contracts/)
 contracts/out/
 contracts/cache/
