@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { GoalMode, GoalStatus, GoalCategory, CheckInFrequency, EvidenceType } from "@prisma/client";
+import {
+  GoalMode,
+  GoalStatus,
+  GoalCategory,
+  CheckInFrequency,
+  EvidenceType,
+  SignalLevel,
+  VerificationStatus,
+} from "@prisma/client";
 
 /**
  * Validation schemas for the data-access boundary.
@@ -110,3 +118,136 @@ export const createDecisionInput = z.object({
   modelVersion: z.string().trim().min(1).max(100).optional(),
 });
 export type CreateDecisionInput = z.input<typeof createDecisionInput>;
+
+// ===========================================================================
+// Build step 5 — remaining agent tools
+// ===========================================================================
+
+/** One milestone within a `createMilestones` batch. */
+const milestoneItemSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  dueDate: z.coerce.date().optional(),
+  // Explicit ordering; when omitted the repository falls back to array order.
+  orderIndex: z.number().int().min(0).max(10000).optional(),
+});
+
+export const createMilestonesInput = z.object({
+  goalId: idSchema,
+  milestones: z.array(milestoneItemSchema).min(1).max(50),
+});
+export type CreateMilestonesInput = z.input<typeof createMilestonesInput>;
+
+/** Schedule the next check-in (and optionally change the structured cadence). */
+export const scheduleCheckInInput = z.object({
+  goalId: idSchema,
+  nextCheckIn: z.coerce.date(),
+  cadence: z.nativeEnum(CheckInFrequency).optional(),
+});
+export type ScheduleCheckInInput = z.input<typeof scheduleCheckInInput>;
+
+/**
+ * Update goal progress and/or a milestone's done state. At least one of the two
+ * must be supplied, and `milestoneDone` only makes sense alongside a `milestoneId`.
+ */
+export const updateProgressInput = z
+  .object({
+    goalId: idSchema,
+    progress: progressSchema.optional(),
+    milestoneId: idSchema.optional(),
+    milestoneDone: z.boolean().optional(),
+  })
+  .refine((v) => v.progress !== undefined || v.milestoneId !== undefined, {
+    message: "provide progress and/or a milestoneId to update",
+  })
+  .refine((v) => v.milestoneDone === undefined || v.milestoneId !== undefined, {
+    message: "milestoneDone requires a milestoneId",
+  });
+export type UpdateProgressInput = z.input<typeof updateProgressInput>;
+
+/**
+ * Structured result of the AI's goal analysis (§5). The three coarse signals are
+ * the model's read on the goal; the free-text `assessment` is what it tells the
+ * user. The optional shaping slots (currentState/desiredState/successMetric) are
+ * persisted back onto the goal when the analysis pins them down.
+ */
+export const analyzeGoalInput = z.object({
+  goalId: idSchema,
+  realism: z.nativeEnum(SignalLevel),
+  safety: z.nativeEnum(SignalLevel),
+  verifiability: z.nativeEnum(SignalLevel),
+  assessment: z.string().trim().min(1).max(5000),
+  currentState: z.string().trim().max(2000).optional(),
+  desiredState: z.string().trim().max(2000).optional(),
+  successMetric: z.string().trim().max(2000).optional(),
+});
+export type AnalyzeGoalInput = z.input<typeof analyzeGoalInput>;
+
+/**
+ * Persist a verification strategy for a goal (§6.1). `methods` and
+ * `requiredEvidence` are free-text/enum-valued strings (the DB columns are
+ * String[]); the strategy engine supplies category-appropriate defaults that the
+ * AI may override.
+ */
+export const createVerificationStrategyInput = z.object({
+  goalId: idSchema,
+  measurement: z.string().trim().min(1).max(2000),
+  methods: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
+  requiredEvidence: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
+  frequency: z.nativeEnum(CheckInFrequency).optional(),
+  confidenceThreshold: z.number().int().min(0).max(100).optional(),
+  fallbackPlan: z.string().trim().max(2000).optional(),
+  rationale: z.string().trim().max(2000).optional(),
+});
+export type CreateVerificationStrategyInput = z.input<typeof createVerificationStrategyInput>;
+
+/** Ask the user for evidence backing a goal's progress. */
+export const requestEvidenceInput = z.object({
+  goalId: idSchema,
+  note: z.string().trim().max(2000).optional(),
+});
+export type RequestEvidenceInput = z.input<typeof requestEvidenceInput>;
+
+/**
+ * One weighted component of an accountability score. The score is always
+ * server-computed (§10) — this shape is what gets logged, never a client-supplied
+ * total.
+ */
+const scoreBreakdownItemSchema = z.object({
+  label: z.string().trim().min(1).max(100),
+  value: z.number(),
+  weight: z.number(),
+});
+
+export const logAccountabilityScoreInput = z.object({
+  score: z.number().int().min(0).max(100),
+  breakdown: z.array(scoreBreakdownItemSchema).max(50),
+  reason: z.string().trim().max(2000).optional(),
+});
+export type LogAccountabilityScoreInput = z.input<typeof logAccountabilityScoreInput>;
+
+// ===========================================================================
+// Build step 6 — verification records
+// ===========================================================================
+
+/**
+ * A verification result to persist (§6). The status/confidence/sub-signals come
+ * from the deterministic reality-check engine, NOT from trusting model text; the
+ * `verificationHash` is the canonical §6.5 digest. `evidenceHash` is a content
+ * hash only — never raw evidence (§9/§10).
+ */
+export const createVerificationRecordInput = z.object({
+  goalId: idSchema,
+  milestoneId: idSchema.optional(),
+  checkInId: idSchema.optional(),
+  status: z.nativeEnum(VerificationStatus),
+  plausibility: z.nativeEnum(SignalLevel).optional(),
+  evidenceQuality: z.nativeEnum(SignalLevel).optional(),
+  consistency: z.nativeEnum(SignalLevel).optional(),
+  confidence: z.number().int().min(0).max(100).default(0),
+  reasoning: z.string().trim().min(1).max(5000),
+  evidenceSummary: z.string().trim().max(5000).optional(),
+  evidenceHash: sha256HexSchema.optional(),
+  verificationHash: z.string().trim().min(1).max(128),
+  modelVersion: z.string().trim().min(1).max(100).optional(),
+});
+export type CreateVerificationRecordInput = z.input<typeof createVerificationRecordInput>;

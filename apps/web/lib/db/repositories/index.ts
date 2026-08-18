@@ -3,3 +3,8 @@ export * from "./goals";
 export * from "./checkins";
 export * from "./evidence";
 export * from "./decisionLog";
+export * from "./milestones";
+export * from "./strategy";
+export * from "./verificationRecords";
+export * from "./commitments";
+export * from "./scores";
