@@ -3,7 +3,7 @@
 import { Gift } from "lucide-react";
 
 import { AppShell } from "@/components/commitai/AppShell";
-import { DemoBadge, UiOnlyNote } from "@/components/commitai/DemoBadge";
+import { UiOnlyNote } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,7 +20,6 @@ export default function RewardsPage() {
         eyebrow="Rewards"
         title="Earned, not given"
         description="Every reward here traces back to a milestone that passed verification."
-        action={<DemoBadge />}
       />
 
       <h2 className="mb-3 text-lg">Ready to claim</h2>

@@ -1,13 +1,12 @@
 "use client";
 
-import { ArrowRight, CalendarClock, Coins, Sparkles, TrendingUp } from "lucide-react";
+import { ArrowRight, CalendarClock, Coins, Sparkles } from "lucide-react";
 import Link from "next/link";
 
 import { AgentMark } from "@/components/commitai/AgentMark";
 import { AppShell } from "@/components/commitai/AppShell";
 import { CategoryIcon, goalCategory } from "@/components/commitai/CategoryIcon";
-import { DemoBadge } from "@/components/commitai/DemoBadge";
-import { ProgressRing, Sparkline } from "@/components/commitai/ProgressRing";
+import { ProgressRing } from "@/components/commitai/ProgressRing";
 import { StatusChip } from "@/components/commitai/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,8 +25,12 @@ export default function Dashboard() {
   const { data: goals = [] } = useGoals();
   const { data: profile } = useWalletProfile();
   const { data: commitments = [] } = useCommitments();
-  const activeCommitment = commitments.find((c) => c.status === "active");
+  const activeCommitment = commitments.find((c) => c.status === "active" && Boolean(c.txHash));
   const upcoming = [...goals].sort((a, b) => a.nextCheckIn.localeCompare(b.nextCheckIn));
+  const needsWord = goals.filter((g) => {
+    const latest = [...g.milestones].reverse().find((m) => m.verification)?.verification;
+    return latest?.status === "needs-evidence";
+  }).length;
 
   return (
     <AppShell>
@@ -46,10 +49,14 @@ export default function Dashboard() {
         />
         <div className="relative">
           <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-            Sunday, 16 August
+            Where things stand
           </p>
           <h1 className="mt-2 max-w-xl text-3xl leading-tight sm:text-4xl">
-            Three goals in motion. One needs a word.
+            {goals.length === 0
+              ? "Let's set the first thing you'll follow through on."
+              : `${goals.length} goal${goals.length === 1 ? "" : "s"} in motion${
+                  needsWord > 0 ? `. ${needsWord} need${needsWord === 1 ? "s" : ""} a word.` : "."
+                }`}
           </h1>
           <p className="mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
             Nothing here is judgement — just where things actually stand.
@@ -101,7 +108,9 @@ export default function Dashboard() {
             <div>
               <p className="text-display text-lg">Talk it through with your agent</p>
               <p className="mt-1 text-sm opacity-80">
-                Book 7 came back needing more evidence. Two minutes should clear it up.
+                {needsWord > 0
+                  ? "Something came back needing more evidence. A couple of minutes should clear it up."
+                  : "Whenever you want to think something through, your agent is here."}
               </p>
             </div>
           </div>
@@ -119,7 +128,6 @@ export default function Dashboard() {
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Accountability score
             </CardTitle>
-            <DemoBadge />
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-4">
@@ -132,12 +140,7 @@ export default function Dashboard() {
                 <span className="text-display text-xl">{profile?.accountabilityScore ?? "—"}</span>
               </ProgressRing>
               <div className="min-w-0">
-                <div className="flex items-center gap-1.5 text-verify">
-                  <TrendingUp className="size-3.5" aria-hidden />
-                  <span className="text-xs font-medium">+4 this month</span>
-                  <Sparkline points={[62, 66, 65, 70, 74, 78]} className="text-verify/70" />
-                </div>
-                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                <p className="text-xs leading-relaxed text-muted-foreground">
                   Built from kept check-ins, verification strength and honesty on missed weeks.
                 </p>
                 <Button asChild variant="link" className="mt-0.5 h-auto p-0 text-xs">
@@ -153,7 +156,6 @@ export default function Dashboard() {
             <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
               <CalendarClock className="size-4" /> Next check-ins
             </CardTitle>
-            <DemoBadge />
           </CardHeader>
           <CardContent className="space-y-2">
             {upcoming.slice(0, 3).map((g) => (
@@ -174,7 +176,6 @@ export default function Dashboard() {
             <CardTitle className="flex items-center gap-2 text-sm font-medium text-chain">
               <Coins className="size-4" /> Funds locked on-chain
             </CardTitle>
-            <DemoBadge />
           </CardHeader>
           <CardContent>
             <p className="text-display text-3xl text-chain">

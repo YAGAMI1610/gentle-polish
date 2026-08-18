@@ -5,7 +5,6 @@ import Link from "next/link";
 
 import { AppShell } from "@/components/commitai/AppShell";
 import { CategoryIcon, goalCategory } from "@/components/commitai/CategoryIcon";
-import { DemoBadge } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
 import { ProgressRing } from "@/components/commitai/ProgressRing";
 import { StatusChip } from "@/components/commitai/StatusChip";
@@ -23,7 +22,6 @@ export default function GoalsPage() {
         eyebrow="Goals"
         title="What you're working on"
         description="Progress is only what's been verified — not what's been promised."
-        action={<DemoBadge />}
       />
 
       {!isLoading && goals.length === 0 && (

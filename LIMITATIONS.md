@@ -19,31 +19,34 @@ and the DB-gated handler tests are gated on a key / a reachable Postgres (§8), 
 missing code. The **live testnet deploy is now done**: `CommitmentVault` is deployed at
 `0x0076c4269be298429af7827a2a5cc40a65f8f8a8` (deploy tx
 `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`), recorded in `README.md`, and
-the live-gated vault read now runs against it and passes (see §2 and §14). **Step 9 (phase 1 of 4) has landed** — the SIWE + iron-session + CSRF/origin auth foundation (§4, §15); step 9 phases
-2–4 and steps 10–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
+the live-gated vault read now runs against it and passes (see §2 and §14). **Step 9 (phases 1–2 of 4) have landed** — the SIWE + iron-session + CSRF/origin auth foundation (§4, §15) and the real read
+wiring that deletes the placeholder data surface (§16); step 9 phases 3–4 and steps 10–12 of
+`CommitAI-Build-Prompt.md` §14 are outstanding.
 
 ---
 
-## 1. All frontend data is labelled placeholder data
+## 1. Frontend data — real for reads as of step 9 (phase 2); write/AI flows still UI-only
 
-**Status:** by design at this step, not a defect.
+**Status:** the placeholder data surface is **gone**. This section previously documented
+`IS_DEMO_DATA=true`, a `<DemoBadge />` on every screen, and a "Frontend preview…" footer;
+phase 2 removed all of it. `apps/web/lib/demo-data.ts` is **deleted**, and every read screen
+now renders the authenticated wallet's real Prisma data through the `/api/*` GET routes (§16).
 
-Every screen reads through `apps/web/hooks/useCommitAI.ts`, whose `queryFn` bodies
-resolve fixtures from `apps/web/lib/demo-data.ts`. Nothing touches a database, an AI
-model, or a chain.
+The 11 view types moved verbatim to `apps/web/lib/types/view.ts`; `hooks/useCommitAI.ts`
+re-exports them, so no component import changed. Removed with the mock surface: the
+`<DemoBadge />` markers on all eight read screens (Dashboard, Goals, Goal detail, Commitments
+list, Rewards, Achievements, Activity, Profile), the AppShell "Frontend preview…" footer, the
+Dashboard's hardcoded hero ("Sunday, 16 August", "Three goals in motion") and its "+4 this
+month" sparkline. Every placeholder `0x…0000` explorer link is gone — explorer links now
+render only when a real broadcast `txHash` exists (rule 1).
 
-This is visible in the UI rather than hidden:
-
-- `IS_DEMO_DATA = true` in `hooks/useCommitAI.ts`
-- `<DemoBadge />` on every screen that shows numbers
-- `<UiOnlyNote>` on every screen with an action button that does not act
-- The sidebar reads "Frontend preview. Data is placeholder and on-chain actions are UI only."
-
-Per build prompt §0 the requirement at this stage is _labelling_, not removal.
-
-**Production fix:** build sequence step 9. The hooks were written so only the `queryFn`
-bodies change — each already carries a `// TODO: fetch('/api/...')` marker and the
-exported signatures stay identical, so no component changes.
+**Still honestly UI-only until phase 3** (each still carries a `<UiOnlyNote>`/`<DemoBadge>` so
+the state is visible, not hidden): the three action screens that need the write/AI/signing seam
+— `/create` (`CreateGoal`), `/check-in` (`CheckIn`), `/verify` (`VerifyPage`) — and the
+`CreateCommitmentFlow` step-through on `/commitments`, which still shows a labelled "mock
+confirmation" and a `0x…0000` pattern. These are rebuilt on real flows in phase 3, when
+`components/commitai/DemoBadge.tsx` is deleted. This staging is the approved plan, not a silent
+gap; the residual grep hits it produces are enumerated in §16.
 
 ## 2. Smart contract: built, tested, and deployed to BOT Chain testnet
 
@@ -103,8 +106,8 @@ frontend/`contractClient` config. BOT Chain testnet params are live-verified in
 
 ## 3. Wallet connection — real as of step 9 (phase 1)
 
-**Status:** real wallet connect + SIWE authentication landed; only the profile _data_ shown on
-`/profile` is still placeholder, until the read wiring of step 9 phase 2 (see §1, §15).
+**Status:** real wallet connect + SIWE authentication landed (phase 1), and as of phase 2 the
+`/profile` data is real too (§16). Nothing on this screen is placeholder any more.
 
 `components/commitai/ConnectWalletDialog.tsx` and `AppShell` now render RainbowKit's
 `ConnectButton`, backed by a wagmi config over the BOT Chain testnet viem chain
@@ -114,10 +117,10 @@ signature recovery via `siwe@3` (no mock), binds the authenticated address into 
 `iron-session` cookie, and clears the nonce. `hooks/useSession.ts` (`GET /api/auth/session`)
 exposes the verified address; `POST /api/auth/logout` destroys the session.
 
-**Still placeholder until phase 2:** the numbers on `/profile` still come from
-`useWalletProfile()` → `demo-data.ts`. Phase 2 keys the React Query hooks on the SIWE address and
-swaps their `queryFn`s to real `/api/*` reads (§1, §15) — the documented staging in the approved
-plan, not a silent gap.
+**Now real as of phase 2:** the numbers on `/profile` come from `useWalletProfile()` → `GET
+/api/profile`, keyed on the SIWE address and live-computed from the wallet's own rows (§16).
+Signed out, `/profile` shows a connect prompt instead of spinning; the connect affordance itself
+has been real since phase 1.
 
 ## 4. CSRF / origin defence and SIWE session — landed in step 9 (phase 1)
 
@@ -144,9 +147,9 @@ Verified by always-on tests (no DB/network): `siwe.test.ts` (real viem-signed me
 wrong-nonce / domain-mismatch / tampered-sig / address-spoof / malformed rejected),
 `origin.test.ts`, `session.test.ts` (weak-password refusal, hardened cookie options, iron-session
 seal/unseal round-trip proving password-mismatch yields `{}` not a forged identity),
-`errors.test.ts` (status mapping incl. the non-leak 403 and generic 500). The write endpoints this
-protects (goals / check-ins / evidence / commitment prepare-sign-record) land in step 9 phase 3;
-the read endpoints in phase 2 (§15).
+`errors.test.ts` (status mapping incl. the non-leak 403 and generic 500). The read endpoints
+landed in phase 2 (§16); the write endpoints this protects (goals / check-ins / evidence /
+commitment prepare-sign-record) land in step 9 phase 3.
 
 ## 5. Lovable editor round-trip is broken
 
@@ -622,9 +625,76 @@ left in place rather than silenced by aliasing them away, because their runtime 
 can't be verified in this browserless sandbox and silencing an unverifiable warning in a
 money-handling app is the worse trade.
 
-**Outstanding (the approved 4-phase plan):** phase 2 wires the GET read routes + serializers and
-**deletes `lib/demo-data.ts`**, retiring the placeholder surface of §1; phase 3 adds the
-write/AI/prepare-sign-record flows; phase 4 is the §13 security-test suite (build step 10). The
-step-9 "no mock data left anywhere" grep gate is satisfied at the end of phases 2–3, not this
-phase — the residual `demo-data` / `example-botchain` / "mock confirmation" hits are pre-existing
-and explicitly owned by those phases, not new fakes.
+**Outstanding (the approved 4-phase plan):** phase 2 is now done — it wired the GET read routes +
+serializers and **deleted `lib/demo-data.ts`**, retiring the placeholder surface of §1 (see §16);
+phase 3 adds the write/AI/prepare-sign-record flows; phase 4 is the §13 security-test suite (build
+step 10). The step-9 "no mock data left anywhere" grep gate is fully satisfied at the end of phase
+3 — after phase 2 the only residual source hits are the labelled `CreateCommitmentFlow` "mock
+confirmation" (owned by phase 3) and rule-1 honesty comments in `lib/**` (each a "no fake" / "not
+configured" guarantee, not a fake), enumerated in §16.
+
+## 16. Step 9 (phase 2) — read wiring: real backend reads, placeholder surface deleted
+
+**Status:** real and verified in-sandbox. `pnpm --filter web typecheck`, `lint`, and `pnpm
+format:check` are clean; the always-on serializer unit tests pass; `pnpm --filter web build`
+(`--webpack`, §7) compiles all eight read routes (exit 0). Every read screen now renders the
+authenticated wallet's real Prisma data — `lib/demo-data.ts` is deleted (§1). This is **phase 2 of
+4** for build step 9; phases 3–4 (write/AI/signing, then the §13 security suite) are outstanding.
+
+**What exists and is real:**
+
+- **View types** — `lib/types/view.ts` holds the 11 UI view types (moved verbatim out of the
+  deleted `demo-data.ts`); `hooks/useCommitAI.ts` re-exports them so no component import changed.
+- **Serializers** — `lib/api/serializers.ts`: pure, side-effect-free Prisma→view mappers,
+  exhaustively unit-tested (`serializers.test.ts`). Full-enum `Record` maps (a new enum member is a
+  compile error, not a silent passthrough), wei `Decimal(78,0)`→token-number conversion, the Reward
+  view over a commitment's reward leg, the `DecisionLog`+`ChainTransaction` activity merge
+  (newest-first), the consecutive-week check-in streak, and the derived achievement list.
+- **Loaders** — `lib/api/loaders.ts`: the impure composition that fetches the related rows a full
+  view needs, all through the existing wallet-scoped repositories (§9).
+- **Read routes** (GET, all `dynamic = "force-dynamic"`, all `requireWallet()`-scoped) —
+  `app/api/{goals, goals/[goalId], commitments, commitments/[id], rewards, achievements, activity,
+profile}/route.ts`. Each resolves the SIWE wallet, calls a loader, and funnels any throw through
+  `toHttpError`. A missing or cross-wallet detail row returns **404** (non-leak — you cannot tell
+  "not yours" from "does not exist"); no SIWE session → **401**.
+- **Fetch client + hooks** — `lib/api/client.ts` `apiGet<T>` sends the session cookie
+  (`credentials:"include"`) and throws a typed `ApiError` carrying the status. The eight React Query
+  hooks are keyed on the `useSession()` address with `enabled: Boolean(address)`, so a query only
+  runs once a wallet has signed in; detail hooks turn a 404 into `undefined`. `GoalDetail` and
+  `ProfilePage` now distinguish signed-out (connect prompt) / loading / not-found instead of an
+  infinite "Loading…".
+
+**No fakes — derived, not fabricated (rule 1):**
+
+- **Achievements are derived from real counts**, never stored `earned` flags: `deriveAchievements`
+  is a live function of the wallet's check-ins / verified milestones / on-chain commitments /
+  completed goals / streak weeks. No `earnedAt` is fabricated — the crossing moment is not
+  persisted, so the optional timestamp is simply omitted and the UI shows "Earned" without a date.
+- **Rewards are a view over the commitment reward leg** (APPROVED + not-withdrawn ⇒ claimable,
+  `rewardWithdrawn` ⇒ claimed), not a balance table (§9). `earnedAt`/`claimedAt` derive from the
+  commitment's `updatedAt` — the only real timestamp available without a dedicated column.
+- **Explorer links render only for a real broadcast `txHash`.** `toCommitmentView` sets `txHash` to
+  `""` until a real hash is indexed; every screen guards on it, so no placeholder `0x…0000` link is
+  ever shown.
+
+**Grep-gate state after this phase** (`grep -rn "mock\|fake\|TODO: real\|hardcoded\|demo-data\|
+example-botchain" apps/web`, excluding `node_modules`/tests): `demo-data` and `example-botchain` are
+**gone** from source. The remaining hits are all justified: the labelled `CreateCommitmentFlow`
+"mock confirmation" on `/commitments` (UI-only, owned by phase 3 — §1), and rule-1 honesty comments
+in `lib/**` that use the words "fake"/"mock"/"hardcoded" only to state the code does **not** do that
+(e.g. "no fake tx", "not a hardcoded switch", "a real cryptographic check (no mock)").
+
+**Honest deferrals (rules 1 & 6 — real interface now, gap recorded here):**
+
+- **The loaders do per-goal follow-up reads (N+1).** `loadGoalViews` fetches milestones /
+  verifications / strategy / commitment per goal rather than in one batched query. It is correct and
+  wallet-scoped, but not optimised; batching (a single grouped query or a DataLoader) is a
+  performance follow-up, noted rather than silently shipped as "fine". At demo scale it is
+  immaterial.
+- **No dedicated achievements-catalog table.** Thresholds live in `deriveAchievements`; a catalog
+  table with per-achievement metadata and a persisted earned-at is deferred (the derivation is
+  real).
+- **Cross-wallet non-leak is proven at the serializer/repository layer** (§9) and enforced by the
+  wallet-scoped repositories the loaders call. End-to-end HTTP-boundary tests (A's session reading
+  B's row → 404) are the **phase 4 / step 10** §13 suite; they are DB-gated (§8).
+- **Write/AI screens stay UI-only until phase 3** — see §1.

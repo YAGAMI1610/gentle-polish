@@ -86,6 +86,21 @@ export async function listVerificationRecords(
   });
 }
 
+/**
+ * Every verification record for this wallet, across all its goals, newest first
+ * (empty if none). Wallet-scoped — a caller only ever sees its own records. Used
+ * to derive achievement counts (verified milestones) for the wallet profile.
+ */
+export async function listWalletVerifications(
+  walletAddress: string,
+): Promise<VerificationRecord[]> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  return prisma.verificationRecord.findMany({
+    where: { walletAddress: addr },
+    orderBy: { submittedAt: "desc" },
+  });
+}
+
 /** The most recent verification for a goal this wallet owns, or null. */
 export async function getLatestVerification(
   walletAddress: string,

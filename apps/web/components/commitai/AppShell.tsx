@@ -96,9 +96,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Link>
           ))}
         </nav>
-        <p className="mt-auto px-3 text-xs leading-relaxed text-muted-foreground">
-          Frontend preview. Data is placeholder and on-chain actions are UI only.
-        </p>
       </aside>
 
       <header className="sticky top-0 z-20 flex items-center justify-between border-b border-border bg-background/90 px-4 py-3 backdrop-blur lg:hidden">

@@ -5,7 +5,7 @@ import { useState } from "react";
 
 import { AppShell } from "@/components/commitai/AppShell";
 import { StepIndicator } from "@/components/commitai/StepIndicator";
-import { DemoBadge, UiOnlyNote } from "@/components/commitai/DemoBadge";
+import { UiOnlyNote } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -216,7 +216,6 @@ export default function CommitmentsPage() {
         eyebrow="On-chain"
         title="Commitments"
         description="Money makes a goal harder to ignore. It should never make failure feel like punishment."
-        action={<DemoBadge />}
       />
 
       <div className="space-y-4">
@@ -269,18 +268,20 @@ export default function CommitmentsPage() {
                 </p>
               </div>
 
-              <a
-                href={explorerUrl(c.txHash)}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-4 inline-flex items-center gap-2 rounded-lg border border-chain/30 bg-chain-soft/60 px-3 py-2 text-xs font-medium text-chain transition-colors hover:bg-chain-soft"
-              >
-                <ExternalLink className="size-3.5" aria-hidden />
-                <span className="font-mono">{formatTxHash(c.txHash)}</span>
-                <span className="font-normal text-muted-foreground">
-                  on the explorer (placeholder)
-                </span>
-              </a>
+              {c.txHash ? (
+                <a
+                  href={explorerUrl(c.txHash)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-4 inline-flex items-center gap-2 rounded-lg border border-chain/30 bg-chain-soft/60 px-3 py-2 text-xs font-medium text-chain transition-colors hover:bg-chain-soft"
+                >
+                  <ExternalLink className="size-3.5" aria-hidden />
+                  <span className="font-mono">{formatTxHash(c.txHash)}</span>
+                  <span className="font-normal text-muted-foreground">on the explorer</span>
+                </a>
+              ) : (
+                <p className="mt-4 text-xs text-muted-foreground">Not yet locked on-chain.</p>
+              )}
             </CardContent>
           </Card>
         ))}
