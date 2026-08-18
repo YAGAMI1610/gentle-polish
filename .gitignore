@@ -51,3 +51,6 @@ contracts/broadcast/
 
 # TypeScript incremental build info
 *.tsbuildinfo
+.env
+apps/web/.env
+contracts/.env
