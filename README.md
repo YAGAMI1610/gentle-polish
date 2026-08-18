@@ -31,13 +31,13 @@ client (`apps/web/lib/chain/`) reads it live — the values below are the real,
 on-chain record of that deployment (verified against the block explorer, not
 invented per `CLAUDE.md` rule 1):
 
-| What                    | Value                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------ |
-| Network                 | BOT Chain testnet (chain id `968`, RPC `https://rpc.bohr.life`)                |
-| CommitmentVault address | `0x0076c4269be298429af7827a2a5cc40a65f8f8a8`                                   |
-| Deploy tx hash          | `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`           |
+| What                    | Value                                                                                        |
+| ----------------------- | -------------------------------------------------------------------------------------------- |
+| Network                 | BOT Chain testnet (chain id `968`, RPC `https://rpc.bohr.life`)                              |
+| CommitmentVault address | `0x0076c4269be298429af7827a2a5cc40a65f8f8a8`                                                 |
+| Deploy tx hash          | `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`                         |
 | Explorer (tx)           | https://scan.bohr.life/tx/0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4 |
-| Explorer (contract)     | https://scan.bohr.life/address/0x0076c4269be298429af7827a2a5cc40a65f8f8a8      |
+| Explorer (contract)     | https://scan.bohr.life/address/0x0076c4269be298429af7827a2a5cc40a65f8f8a8                    |
 
 > **Testnet trust setup:** on this deployment the contract `owner`, the `attestor`,
 > and the deployer are the **same** address (`0xae5c…7607`). This is money-safe — the

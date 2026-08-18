@@ -19,8 +19,8 @@ and the DB-gated handler tests are gated on a key / a reachable Postgres (§8), 
 missing code. The **live testnet deploy is now done**: `CommitmentVault` is deployed at
 `0x0076c4269be298429af7827a2a5cc40a65f8f8a8` (deploy tx
 `0xde9e4426f467460a5aa592e765b2427d207b9dcc32e8fb2bfb58e94eb879cdd4`), recorded in `README.md`, and
-the live-gated vault read now runs against it and passes (see §2 and §14). Steps 9–12 of
-`CommitAI-Build-Prompt.md` §14 are outstanding.
+the live-gated vault read now runs against it and passes (see §2 and §14). **Step 9 (phase 1 of 4) has landed** — the SIWE + iron-session + CSRF/origin auth foundation (§4, §15); step 9 phases
+2–4 and steps 10–12 of `CommitAI-Build-Prompt.md` §14 are outstanding.
 
 ---
 
@@ -101,29 +101,52 @@ The broadcast prints the deployed address + tx hash; those go into `README.md` a
 frontend/`contractClient` config. BOT Chain testnet params are live-verified in
 `.env.example` (chain id 968, RPC `https://rpc.bohr.life`).
 
-## 3. No wallet connection
+## 3. Wallet connection — real as of step 9 (phase 1)
 
-`components/commitai/ConnectWalletDialog.tsx` is presentational. The address shown on
-`/profile` comes from `useWalletProfile()` → `demo-data.ts`.
+**Status:** real wallet connect + SIWE authentication landed; only the profile _data_ shown on
+`/profile` is still placeholder, until the read wiring of step 9 phase 2 (see §1, §15).
 
-Per `CLAUDE.md` rule 1 this is not presented as a working connection; the dialog is
-inside a `<DemoBadge />`-labelled card.
+`components/commitai/ConnectWalletDialog.tsx` and `AppShell` now render RainbowKit's
+`ConnectButton`, backed by a wagmi config over the BOT Chain testnet viem chain
+(`lib/wagmi/config.ts`). Signing in runs a real SIWE (EIP-4361) challenge: `GET /api/auth/nonce`
+→ the wallet signs the message → `POST /api/auth/verify` performs a real offline EIP-191
+signature recovery via `siwe@3` (no mock), binds the authenticated address into an encrypted
+`iron-session` cookie, and clears the nonce. `hooks/useSession.ts` (`GET /api/auth/session`)
+exposes the verified address; `POST /api/auth/logout` destroys the session.
 
-**Production fix:** step 8 — wagmi + viem + RainbowKit, SIWE for session auth.
+**Still placeholder until phase 2:** the numbers on `/profile` still come from
+`useWalletProfile()` → `demo-data.ts`. Phase 2 keys the React Query hooks on the SIWE address and
+swaps their `queryFn`s to real `/api/*` reads (§1, §15) — the documented staging in the approved
+plan, not a silent gap.
 
-## 4. CSRF protection was dropped in the framework migration
+## 4. CSRF / origin defence and SIWE session — landed in step 9 (phase 1)
 
-The pre-migration TanStack Start app had `src/start.ts` containing
-`createCsrfMiddleware()` applied to server functions. Next.js App Router has no
-equivalent global hook, and this step ships **no** server functions, route handlers or
-mutations — so there is currently nothing to protect and no equivalent was added.
+**Status: implemented.** Renamed from "CSRF protection was dropped in the framework migration"
+and kept as the record that the intent survived to the step that reintroduced server-side
+handlers. The first route handlers (the `/api/auth/*` set) ship in step 9 **together with** their
+defence, honouring §9's rule "do not add write endpoints before this is in place":
 
-This is recorded rather than dropped silently because the intent must survive to the
-step that reintroduces server-side mutations.
+- **SIWE session** — `lib/auth/session.ts` wraps `iron-session` (encrypted, `httpOnly`,
+  `sameSite=lax`, `secure` in production, cookie `commitai_session`). `SESSION_PASSWORD` must be
+  ≥32 chars with **no weak fallback** — `getSessionOptions()` throws otherwise. `requireWallet()`
+  yields the authenticated lowercased address or throws `UnauthorizedError` → 401.
+- **Origin / CSRF defence** — `lib/auth/origin.ts` `assertSameOrigin(req)` rejects state-changing
+  requests whose `Origin` host is neither the request host nor in the
+  `APP_ORIGIN`/`NEXT_PUBLIC_APP_URL` allowlist (`ForbiddenError` → 403); GET/HEAD bypass.
+  `middleware.ts` applies the same check across `/api/*` as defence-in-depth, and each
+  state-changing handler re-checks at the route layer.
+- **Error mapping** — `lib/auth/errors.ts` `toHttpError()` maps `UnauthorizedError`→401,
+  `ForbiddenError`/origin failure→403, `WalletScopeError` (`lib/db/errors.ts`)→403 with a
+  **non-leaking** `{error:"forbidden"}` body, `ZodError`/bad input→400, unknown→500
+  `{error:"internal error"}`.
 
-**Production fix:** step 3 onward. When `app/api/*/route.ts` handlers land, they need
-origin checking and CSRF defence re-established at the route-handler layer, plus the
-SIWE session binding from step 8. Do not add write endpoints before this is in place.
+Verified by always-on tests (no DB/network): `siwe.test.ts` (real viem-signed messages accepted;
+wrong-nonce / domain-mismatch / tampered-sig / address-spoof / malformed rejected),
+`origin.test.ts`, `session.test.ts` (weak-password refusal, hardened cookie options, iron-session
+seal/unseal round-trip proving password-mismatch yields `{}` not a forged identity),
+`errors.test.ts` (status mapping incl. the non-leak 403 and generic 500). The write endpoints this
+protects (goals / check-ins / evidence / commitment prepare-sign-record) land in step 9 phase 3;
+the read endpoints in phase 2 (§15).
 
 ## 5. Lovable editor round-trip is broken
 
@@ -177,7 +200,10 @@ root ignore file and sweep `.next/`. `apps/web`'s own `format` script passes
 
 This is an environment limitation, not a repo defect: the same file reads fine through
 glibc (`head`, `python3`) and fails only through Rust's `statx` path, which also breaks
-`ls` on that file. `next build --webpack` succeeds and produces all 12 routes.
+`ls` on that file. `next build --webpack` succeeds and produces every route (the app
+pages plus the step-9 `/api/auth/*` handlers and the middleware). As of step 9, `apps/web`'s
+`dev` and `build` scripts pass `--webpack` explicitly so this sandbox works out of the box;
+drop the flag on a normal host to use the faster default Turbopack builder.
 
 **Fix:** none needed in the repo. On a normal Linux host the default Turbopack build
 works. Use `--webpack` when building inside this sandbox.
@@ -540,3 +566,65 @@ broadcast hash.
 **No write endpoints were added.** The chain client and indexer are internal library code; no
 `app/api/*` route handler ships here, so §4's rule (no write endpoints before CSRF/origin defence +
 SIWE) is still honoured. The AI holds no key and has no fund-moving path (rule 3).
+
+## 15. Step 9 (phase 1) — wallet auth foundation (SIWE + iron-session + CSRF/origin)
+
+**Status:** real and verified in-sandbox, and the boundary every later route depends on. `pnpm
+--filter web typecheck`, `lint`, and `pnpm format:check` are clean; the always-on auth tests pass
+(SIWE with real EIP-191 crypto, origin/CSRF, iron-session seal/unseal, HTTP error mapping); `pnpm
+--filter web build` compiles all four `/api/auth/*` routes and the middleware (exit 0). This is
+**phase 1 of 4** for build step 9; phases 2–4 are outstanding (see the tail of this entry).
+
+**What exists and is real:**
+
+- **Server auth** — `lib/auth/{session,session-core,siwe,origin,errors}.ts`. `session-core.ts` is
+  pure (no `next/headers`) so it unit-tests without a request; `session.ts` binds it to Next 16's
+  async `cookies()` at a single documented boundary cast. SIWE verification is a real offline
+  EIP-191 signature recovery via `siwe@3` (no mock), bound to a server-issued single-use nonce and
+  the request domain (anti-replay, anti-domain-swap). Details of the session/CSRF/error surface are
+  in §3 and §4.
+- **Auth routes** — `app/api/auth/{nonce,verify,session,logout}/route.ts`: issue nonce → verify
+  signature + `ensureWallet()` and bind the address → expose the session address → destroy.
+  `verify`/`logout` call `assertSameOrigin` and funnel every throw through `toHttpError`.
+- **Middleware** — `middleware.ts` runs the same-origin check on `/api/*` (defence-in-depth; each
+  handler re-checks). Next 16 prints a "middleware → proxy" deprecation notice; it is a rename
+  advisory only and does not affect behaviour.
+- **Client wiring** — `app/providers.tsx` nests `WagmiProvider` → `QueryClientProvider` →
+  RainbowKit's `AuthenticationProvider` with a `createAuthenticationAdapter` driving the
+  `/api/auth/*` endpoints (iron-session, **not** next-auth). wagmi config (`lib/wagmi/config.ts`)
+  reuses the prebuilt BOT Chain testnet viem chain from `lib/chain/botchain.ts`.
+  `hooks/useSession.ts` exposes the authenticated address that the phase-2 hooks will key on.
+- **Env** — `SESSION_PASSWORD` (secret, ≥32 chars), `APP_ORIGIN`, `NEXT_PUBLIC_APP_URL` added to
+  `.env`/`.env.example`. `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` already present. `SESSION_PASSWORD`
+  must be set to a real ≥32-char secret before running; the app refuses to start otherwise (no weak
+  fallback — §4).
+
+**Money-safety (rules 2–3):** this phase adds authentication only. No route moves funds and no
+signer is instantiated anywhere. The fund flows (prepare-only calldata for the user's own wallet to
+sign) are phase 3; the architectural "AI/backend has no fund-moving signer" proof is phase 4
+(build step 10, §13).
+
+**Build note — unused Coinbase x402 peer deps stubbed (rule 6, not a silent cut):** RainbowKit's
+Base Account connector transitively pulls `@coinbase/cdp-sdk`, which declares
+`@x402/{core,evm,extensions,svm}` (Coinbase's x402 payment protocol) as **peer** dependencies.
+CommitAI never uses x402 — it uses standard EVM wallets on BOT Chain — so those packages are neither
+installed nor reached at runtime. Left unresolved they abort the bundle ("Module not found: Can't
+resolve '@x402/evm'"); `next.config.ts` aliases all four to an empty module
+(`lib/stubs/x402-peer-stub.ts`) for both the webpack and Turbopack resolvers. Production fix if
+x402 is ever actually wanted: install the four packages instead of stubbing them.
+
+**Known-benign build warnings (warnings, not errors — the build exits 0):** the webpack build
+prints optional-dependency warnings from the wallet stack — `@metamask/sdk` →
+`@react-native-async-storage/async-storage` (a React-Native-only backend), `pino` → `pino-pretty`
+(WalletConnect's optional dev log formatter), plus a Next-internal `process.cwd` Edge-Runtime
+advisory from `dynamic-rendering.js`. None are our code and none affect functionality. They are
+left in place rather than silenced by aliasing them away, because their runtime fallback behaviour
+can't be verified in this browserless sandbox and silencing an unverifiable warning in a
+money-handling app is the worse trade.
+
+**Outstanding (the approved 4-phase plan):** phase 2 wires the GET read routes + serializers and
+**deletes `lib/demo-data.ts`**, retiring the placeholder surface of §1; phase 3 adds the
+write/AI/prepare-sign-record flows; phase 4 is the §13 security-test suite (build step 10). The
+step-9 "no mock data left anywhere" grep gate is satisfied at the end of phases 2–3, not this
+phase — the residual `demo-data` / `example-botchain` / "mock confirmation" hits are pre-existing
+and explicitly owned by those phases, not new fakes.
