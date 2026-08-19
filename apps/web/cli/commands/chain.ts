@@ -125,7 +125,8 @@ export async function run(
         () => readCancellationOpensAt(id, config),
         `read cancellation window for #${id}`,
       );
-      const iso = opensAt === 0n ? "not applicable" : new Date(Number(opensAt) * 1000).toISOString();
+      const iso =
+        opensAt === 0n ? "not applicable" : new Date(Number(opensAt) * 1000).toISOString();
       emit(
         { commitmentId: id, opensAt, opensAtIso: iso },
         global,

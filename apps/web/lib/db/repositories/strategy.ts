@@ -7,6 +7,7 @@ import {
   evmAddressSchema,
   type CreateVerificationStrategyInput,
 } from "../schemas";
+import { indexByKey } from "./grouping";
 
 /**
  * Wallet-scoped verification-strategy access (§6.1).
@@ -57,4 +58,23 @@ export async function getVerificationStrategy(
   return prisma.verificationStrategy.findFirst({
     where: { goalId, goal: { walletAddress: addr } },
   });
+}
+
+/**
+ * Strategies for a SET of goals this wallet owns, indexed by goalId — ONE query,
+ * not one per goal (build-prompt §16 / item 6 N+1 fix). A goal has at most one
+ * strategy (unique `goalId`), so this is a plain id→strategy map. Wallet-scoped
+ * through the goal relation; an empty id list short-circuits with no query; a goal
+ * with no strategy is absent from the map (caller defaults to null).
+ */
+export async function getVerificationStrategiesForGoals(
+  walletAddress: string,
+  goalIds: readonly string[],
+): Promise<Map<string, VerificationStrategy>> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  if (goalIds.length === 0) return new Map();
+  const rows = await prisma.verificationStrategy.findMany({
+    where: { goalId: { in: [...goalIds] }, goal: { walletAddress: addr } },
+  });
+  return indexByKey(rows, (s) => s.goalId);
 }

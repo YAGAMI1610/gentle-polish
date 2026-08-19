@@ -152,7 +152,10 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
     event AttestorUpdated(address indexed previousAttestor, address indexed newAttestor);
     event GoalRegistered(uint256 indexed goalId, address indexed owner, bytes32 goalHash);
     event MilestoneRegistered(
-        uint256 indexed goalId, bytes32 indexed milestoneRef, bytes32 verificationHash, uint16 confidence
+        uint256 indexed goalId,
+        bytes32 indexed milestoneRef,
+        bytes32 verificationHash,
+        uint16 confidence
     );
     event CommitmentCreated(
         uint256 indexed commitmentId,
@@ -166,12 +169,21 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
     );
     event RewardFunded(uint256 indexed commitmentId, address indexed funder, uint256 amount);
     event FundsLocked(uint256 indexed commitmentId, address indexed depositor, uint256 amount);
-    event CompletionRequested(uint256 indexed commitmentId, address indexed requester, bytes32 verificationHash);
-    event CompletionApproved(uint256 indexed commitmentId, bytes32 verificationHash, uint16 confidence);
-    event PrincipalReleased(uint256 indexed commitmentId, address indexed depositor, uint256 amount);
+    event CompletionRequested(
+        uint256 indexed commitmentId, address indexed requester, bytes32 verificationHash
+    );
+    event CompletionApproved(
+        uint256 indexed commitmentId, bytes32 verificationHash, uint16 confidence
+    );
+    event PrincipalReleased(
+        uint256 indexed commitmentId, address indexed depositor, uint256 amount
+    );
     event RewardClaimed(uint256 indexed commitmentId, address indexed depositor, uint256 amount);
     event CommitmentCancelled(
-        uint256 indexed commitmentId, address indexed depositor, uint256 principalReturned, uint256 rewardReturned
+        uint256 indexed commitmentId,
+        address indexed depositor,
+        uint256 principalReturned,
+        uint256 rewardReturned
     );
     event RefundEscrowed(address indexed recipient, uint256 amount);
     event EscrowWithdrawn(address indexed recipient, uint256 amount);
@@ -247,7 +259,8 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
         if (goalHash == bytes32(0)) revert EmptyVerificationHash();
 
         goalId = nextGoalId++;
-        _goals[goalId] = Goal({owner: msg.sender, registeredAt: uint64(block.timestamp), goalHash: goalHash});
+        _goals[goalId] =
+            Goal({owner: msg.sender, registeredAt: uint64(block.timestamp), goalHash: goalHash});
         _goalsByWallet[msg.sender].push(goalId);
 
         emit GoalRegistered(goalId, msg.sender, goalHash);
@@ -313,8 +326,12 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
         // seconds cannot do anything meaningful to a deadline set days or weeks out, and
         // the only effect here is rejecting a deadline that has already passed.
         // forge-lint: disable-next-line(block-timestamp)
-        if (deadline != 0 && deadline <= block.timestamp) revert DeadlineInPast(deadline, uint64(block.timestamp));
-        if (gracePeriod > MAX_GRACE_PERIOD) revert GracePeriodTooLong(gracePeriod, MAX_GRACE_PERIOD);
+        if (deadline != 0 && deadline <= block.timestamp) {
+            revert DeadlineInPast(deadline, uint64(block.timestamp));
+        }
+        if (gracePeriod > MAX_GRACE_PERIOD) {
+            revert GracePeriodTooLong(gracePeriod, MAX_GRACE_PERIOD);
+        }
         if (confidenceThreshold == 0 || confidenceThreshold > 100) {
             revert InvalidConfidenceThreshold(confidenceThreshold);
         }
@@ -335,7 +352,14 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
         _commitmentsByWallet[msg.sender].push(commitmentId);
 
         emit CommitmentCreated(
-            commitmentId, goalId, msg.sender, principalAmount, rewardAmount, deadline, gracePeriod, confidenceThreshold
+            commitmentId,
+            goalId,
+            msg.sender,
+            principalAmount,
+            rewardAmount,
+            deadline,
+            gracePeriod,
+            confidenceThreshold
         );
     }
 
@@ -478,8 +502,10 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
         Commitment storage c = _commitments[commitmentId];
         _requireExists(c, commitmentId);
         if (msg.sender != c.depositor) revert NotDepositor(msg.sender);
-        if (c.status != CommitmentStatus.Created && c.status != CommitmentStatus.Active
-            && c.status != CommitmentStatus.CompletionRequested) {
+        if (
+            c.status != CommitmentStatus.Created && c.status != CommitmentStatus.Active
+                && c.status != CommitmentStatus.CompletionRequested
+        ) {
             revert InvalidStatus(c.status);
         }
 
@@ -492,7 +518,9 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
             // in days, and the direction of that skew cannot take funds from anyone —
             // the only outcome either way is the depositor getting their own money back.
             // forge-lint: disable-next-line(block-timestamp)
-            if (block.timestamp < opensAt) revert CancellationNotYetOpen(opensAt, uint64(block.timestamp));
+            if (block.timestamp < opensAt) {
+                revert CancellationNotYetOpen(opensAt, uint64(block.timestamp));
+            }
         }
 
         uint256 principalReturned = 0;

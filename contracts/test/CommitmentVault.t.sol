@@ -37,11 +37,18 @@ contract CommitmentVaultTest is Test {
         uint16 confidenceThreshold
     );
     event FundsLocked(uint256 indexed commitmentId, address indexed depositor, uint256 amount);
-    event CompletionApproved(uint256 indexed commitmentId, bytes32 verificationHash, uint16 confidence);
-    event PrincipalReleased(uint256 indexed commitmentId, address indexed depositor, uint256 amount);
+    event CompletionApproved(
+        uint256 indexed commitmentId, bytes32 verificationHash, uint16 confidence
+    );
+    event PrincipalReleased(
+        uint256 indexed commitmentId, address indexed depositor, uint256 amount
+    );
     event RewardClaimed(uint256 indexed commitmentId, address indexed depositor, uint256 amount);
     event CommitmentCancelled(
-        uint256 indexed commitmentId, address indexed depositor, uint256 principalReturned, uint256 rewardReturned
+        uint256 indexed commitmentId,
+        address indexed depositor,
+        uint256 principalReturned,
+        uint256 rewardReturned
     );
     event RefundEscrowed(address indexed recipient, uint256 amount);
     event EscrowWithdrawn(address indexed recipient, uint256 amount);
@@ -59,7 +66,10 @@ contract CommitmentVaultTest is Test {
     // -------------------------------------------------------------------------
 
     /// @dev Register a goal and create a commitment as `depositor`, no funds locked yet.
-    function _createCommitment(uint64 deadline, uint64 grace) internal returns (uint256 goalId, uint256 commitmentId) {
+    function _createCommitment(uint64 deadline, uint64 grace)
+        internal
+        returns (uint256 goalId, uint256 commitmentId)
+    {
         vm.startPrank(depositor);
         goalId = vault.registerGoal(GOAL_HASH);
         commitmentId = vault.createCommitment(goalId, PRINCIPAL, REWARD, deadline, grace, THRESHOLD);
@@ -116,19 +126,26 @@ contract CommitmentVaultTest is Test {
         vm.prank(depositor);
         vault.lockFunds{value: PRINCIPAL}(id);
         assertEq(address(vault).balance, PRINCIPAL + REWARD);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Active));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Active)
+        );
 
         // Completion requested by the attestor.
         vm.prank(attestor);
         vault.requestCompletion(id, VERIF_HASH);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.CompletionRequested));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)),
+            uint8(CommitmentVault.CommitmentStatus.CompletionRequested)
+        );
 
         // Attestor approves at/above the threshold — flag flip only, no transfer.
         vm.expectEmit(true, false, false, true);
         emit CompletionApproved(id, VERIF_HASH, 92);
         vm.prank(attestor);
         vault.approveCompletion(id, VERIF_HASH, 92);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Approved));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Approved)
+        );
 
         // Depositor pulls principal, then reward.
         uint256 balBefore = depositor.balance;
@@ -145,7 +162,9 @@ contract CommitmentVaultTest is Test {
 
         assertEq(depositor.balance, balBefore + PRINCIPAL + REWARD);
         assertEq(address(vault).balance, 0);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Closed));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Closed)
+        );
     }
 
     function test_happyPath_noReward() public {
@@ -172,7 +191,9 @@ contract CommitmentVaultTest is Test {
         vault.releasePrincipal(id);
         assertEq(depositor.balance, balBefore + PRINCIPAL);
         assertEq(address(vault).balance, 0);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Closed));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Closed)
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -193,7 +214,9 @@ contract CommitmentVaultTest is Test {
         assertEq(depositor.balance, depBefore + PRINCIPAL);
         assertEq(sponsor.balance, sponBefore + REWARD);
         assertEq(address(vault).balance, 0);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled)
+        );
     }
 
     function test_cancel_beforeLock_isAllowedImmediately() public {
@@ -201,7 +224,9 @@ contract CommitmentVaultTest is Test {
         // No funds locked yet: cancellation is open even with a future deadline.
         vm.prank(depositor);
         vault.cancelCommitment(id);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled)
+        );
     }
 
     function test_cancel_deadlineGoal_blockedUntilGraceElapses() public {
@@ -213,7 +238,9 @@ contract CommitmentVaultTest is Test {
         vm.prank(depositor);
         vm.expectRevert(
             abi.encodeWithSelector(
-                CommitmentVault.CancellationNotYetOpen.selector, deadline + grace, uint64(block.timestamp)
+                CommitmentVault.CancellationNotYetOpen.selector,
+                deadline + grace,
+                uint64(block.timestamp)
             )
         );
         vault.cancelCommitment(id);
@@ -223,7 +250,9 @@ contract CommitmentVaultTest is Test {
         vm.prank(depositor);
         vm.expectRevert(
             abi.encodeWithSelector(
-                CommitmentVault.CancellationNotYetOpen.selector, deadline + grace, uint64(block.timestamp)
+                CommitmentVault.CancellationNotYetOpen.selector,
+                deadline + grace,
+                uint64(block.timestamp)
             )
         );
         vault.cancelCommitment(id);
@@ -244,7 +273,9 @@ contract CommitmentVaultTest is Test {
         // Depositor changes their mind while awaiting attestation: still fully refundable.
         vm.prank(depositor);
         vault.cancelCommitment(id);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled)
+        );
     }
 
     function test_cancel_afterApproval_isRejected() public {
@@ -363,7 +394,9 @@ contract CommitmentVaultTest is Test {
 
         vm.prank(attestor);
         vm.expectRevert(
-            abi.encodeWithSelector(CommitmentVault.ConfidenceBelowThreshold.selector, THRESHOLD - 1, THRESHOLD)
+            abi.encodeWithSelector(
+                CommitmentVault.ConfidenceBelowThreshold.selector, THRESHOLD - 1, THRESHOLD
+            )
         );
         vault.approveCompletion(id, VERIF_HASH, THRESHOLD - 1);
     }
@@ -373,7 +406,9 @@ contract CommitmentVaultTest is Test {
         // Skipped requestCompletion — still Active.
         vm.prank(attestor);
         vm.expectRevert(
-            abi.encodeWithSelector(CommitmentVault.InvalidStatus.selector, CommitmentVault.CommitmentStatus.Active)
+            abi.encodeWithSelector(
+                CommitmentVault.InvalidStatus.selector, CommitmentVault.CommitmentStatus.Active
+            )
         );
         vault.approveCompletion(id, VERIF_HASH, 90);
     }
@@ -494,7 +529,9 @@ contract CommitmentVaultTest is Test {
 
         // Non-owner cannot rotate.
         vm.prank(stranger);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger)
+        );
         vault.setAttestor(stranger);
 
         // The rotated-in attestor can now approve; the old one cannot.
@@ -514,7 +551,11 @@ contract CommitmentVaultTest is Test {
     function test_lockFunds_wrongAmount_reverts() public {
         (, uint256 id) = _createCommitment(0, 0);
         vm.prank(depositor);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.IncorrectValue.selector, PRINCIPAL, PRINCIPAL - 1));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CommitmentVault.IncorrectValue.selector, PRINCIPAL, PRINCIPAL - 1
+            )
+        );
         vault.lockFunds{value: PRINCIPAL - 1}(id);
     }
 
@@ -528,7 +569,9 @@ contract CommitmentVaultTest is Test {
     function test_fundReward_wrongAmount_reverts() public {
         (, uint256 id) = _createCommitment(0, 0);
         vm.prank(sponsor);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.IncorrectValue.selector, REWARD, REWARD + 1));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.IncorrectValue.selector, REWARD, REWARD + 1)
+        );
         vault.fundReward{value: REWARD + 1}(id);
     }
 
@@ -552,9 +595,13 @@ contract CommitmentVaultTest is Test {
     function test_createCommitment_badThreshold_reverts() public {
         vm.startPrank(depositor);
         uint256 goalId = vault.registerGoal(GOAL_HASH);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.InvalidConfidenceThreshold.selector, uint16(0)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.InvalidConfidenceThreshold.selector, uint16(0))
+        );
         vault.createCommitment(goalId, PRINCIPAL, REWARD, 0, 0, 0);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.InvalidConfidenceThreshold.selector, uint16(101)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.InvalidConfidenceThreshold.selector, uint16(101))
+        );
         vault.createCommitment(goalId, PRINCIPAL, REWARD, 0, 0, 101);
         vm.stopPrank();
     }
@@ -564,7 +611,11 @@ contract CommitmentVaultTest is Test {
         vm.startPrank(depositor);
         uint256 goalId = vault.registerGoal(GOAL_HASH);
         uint64 past = uint64(block.timestamp - 1);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.DeadlineInPast.selector, past, uint64(block.timestamp)));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CommitmentVault.DeadlineInPast.selector, past, uint64(block.timestamp)
+            )
+        );
         vault.createCommitment(goalId, PRINCIPAL, REWARD, past, 0, THRESHOLD);
         vm.stopPrank();
     }
@@ -574,9 +625,13 @@ contract CommitmentVaultTest is Test {
         uint256 goalId = vault.registerGoal(GOAL_HASH);
         uint64 tooLong = vault.MAX_GRACE_PERIOD() + 1;
         vm.expectRevert(
-            abi.encodeWithSelector(CommitmentVault.GracePeriodTooLong.selector, tooLong, vault.MAX_GRACE_PERIOD())
+            abi.encodeWithSelector(
+                CommitmentVault.GracePeriodTooLong.selector, tooLong, vault.MAX_GRACE_PERIOD()
+            )
         );
-        vault.createCommitment(goalId, PRINCIPAL, REWARD, uint64(block.timestamp + 1 days), tooLong, THRESHOLD);
+        vault.createCommitment(
+            goalId, PRINCIPAL, REWARD, uint64(block.timestamp + 1 days), tooLong, THRESHOLD
+        );
         vm.stopPrank();
     }
 
@@ -591,7 +646,9 @@ contract CommitmentVaultTest is Test {
     function test_createCommitment_oneCommitmentPerGoal() public {
         (uint256 goalId,) = _createCommitment(0, 0);
         vm.prank(depositor);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.GoalAlreadyCommitted.selector, goalId));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.GoalAlreadyCommitted.selector, goalId)
+        );
         vault.createCommitment(goalId, PRINCIPAL, REWARD, 0, 0, THRESHOLD);
     }
 
@@ -612,9 +669,13 @@ contract CommitmentVaultTest is Test {
         // Refund transfer fails → the whole cancel reverts atomically; funds stay put
         // and status is unchanged (still Active), so it can be retried later.
         vm.prank(address(rr));
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.TransferFailed.selector, address(rr), PRINCIPAL));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.TransferFailed.selector, address(rr), PRINCIPAL)
+        );
         rr.cancel(id);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Active));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Active)
+        );
         assertEq(address(vault).balance, PRINCIPAL);
     }
 
@@ -652,7 +713,9 @@ contract CommitmentVaultTest is Test {
         assertEq(depositor.balance, depBefore + PRINCIPAL, "principal returned to depositor");
         assertEq(vault.escrowedRefunds(address(funder)), REWARD, "reward held in escrow for funder");
         assertEq(address(vault).balance, REWARD, "only the escrowed reward remains");
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled)
+        );
     }
 
     function test_withdrawEscrow_pullsEscrowedRefund() public {
@@ -734,7 +797,9 @@ contract CommitmentVaultTest is Test {
     // -------------------------------------------------------------------------
 
     function test_getCommitment_unknownReverts() public {
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.UnknownCommitment.selector, uint256(999)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.UnknownCommitment.selector, uint256(999))
+        );
         vault.getCommitment(999);
     }
 
@@ -796,12 +861,17 @@ contract CommitmentVaultTest is Test {
         vm.prank(attestor);
         if (confidence < threshold) {
             vm.expectRevert(
-                abi.encodeWithSelector(CommitmentVault.ConfidenceBelowThreshold.selector, confidence, threshold)
+                abi.encodeWithSelector(
+                    CommitmentVault.ConfidenceBelowThreshold.selector, confidence, threshold
+                )
             );
             vault.approveCompletion(id, VERIF_HASH, confidence);
         } else {
             vault.approveCompletion(id, VERIF_HASH, confidence);
-            assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Approved));
+            assertEq(
+                uint8(vault.getCommitmentStatus(id)),
+                uint8(CommitmentVault.CommitmentStatus.Approved)
+            );
         }
     }
 }

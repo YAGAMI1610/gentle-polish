@@ -14,16 +14,18 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ApiError, apiGet, apiPost, apiPostForm } from "@/lib/api/client";
+import { ApiError, apiGet, apiPost, apiPostForm, apiSend } from "@/lib/api/client";
 import { explorerTxUrl } from "@/lib/chain/botchain";
 import { useSession } from "@/hooks/useSession";
 import type {
   AiTurnRequest,
   AiTurnResponse,
   CheckInResult,
+  ConnectorsResponse,
   CreateCheckInRequest,
   CreateGoalRequest,
   EvidenceResult,
+  ImportGithubRequest,
   PrepareCommitmentRequest,
   PrepareCommitmentResult,
   PrepareSignResult,
@@ -204,7 +206,37 @@ export function useUploadEvidence() {
   });
 }
 
-/** Save draft commitment terms + get `createCommitment` calldata (prepare-only). */
+/** The wallet's evidence connectors + which providers are configured (item 8). */
+export function useConnectors() {
+  const { address } = useSession();
+  return useQuery<ConnectorsResponse>({
+    queryKey: ["connectors", address],
+    enabled: Boolean(address),
+    queryFn: () => apiGet<ConnectorsResponse>("/api/connectors"),
+  });
+}
+
+/** Import recent GitHub activity as evidence against a goal (item 8). */
+export function useImportGithub() {
+  const queryClient = useQueryClient();
+  return useMutation<EvidenceResult, Error, ImportGithubRequest>({
+    mutationFn: (body) => apiPost<EvidenceResult>("/api/connectors/github/import", body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["goals"] });
+    },
+  });
+}
+
+/** Disconnect GitHub for the signed-in wallet (deletes the stored token; item 8). */
+export function useDisconnectGithub() {
+  const queryClient = useQueryClient();
+  return useMutation<{ disconnected: boolean }, Error, void>({
+    mutationFn: () => apiSend<{ disconnected: boolean }>("/api/connectors/github", "DELETE"),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["connectors"] });
+    },
+  });
+}
 export function usePrepareCommitment() {
   const queryClient = useQueryClient();
   return useMutation<PrepareCommitmentResult, Error, PrepareCommitmentRequest>({

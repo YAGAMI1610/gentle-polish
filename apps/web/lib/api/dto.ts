@@ -88,7 +88,20 @@ export interface CheckInResult {
   createdAt: string;
 }
 
-/** POST /api/chain/record response — the indexed on-chain transaction row. */
+/**
+ * POST /api/chain/record response — the indexed on-chain transaction row, plus the
+ * result of the best-effort on-chain-id back-fill (build-prompt §14.8; LIMITATIONS §17).
+ *
+ * For a REGISTER_GOAL / CREATE_COMMITMENT hash the server re-reads the receipt and
+ * writes the emitted id onto the owning row, so the client learns the goal/commitment
+ * is now `prepare*`-ready in the same round-trip. `backfilled` is true only when THIS
+ * record is what first wrote the id; `onchainGoalId` / `onchainCommitmentId` carry the
+ * decoded id (as a base-10 string — a uint256 does not fit a JS number) whenever one was
+ * found, even on an idempotent re-record. `backfillReason` is a non-null, honest
+ * explanation whenever nothing was written (chain not configured, id already set, no
+ * matching event, owner mismatch); it is null on a clean first back-fill and for the
+ * kinds that carry no id to recover (rule 1 — never a fabricated success).
+ */
 export interface ChainRecordResult {
   id: string;
   kind: string;
@@ -98,6 +111,10 @@ export interface ChainRecordResult {
   commitmentId: string | null;
   goalId: string | null;
   createdAt: string;
+  backfilled: boolean;
+  onchainGoalId: string | null;
+  onchainCommitmentId: string | null;
+  backfillReason: string | null;
 }
 
 /** POST /api/evidence response — the stored evidence pointer (no raw bytes). */
@@ -110,6 +127,28 @@ export interface EvidenceResult {
   mimeType: string | null;
   fileName: string | null;
   createdAt: string;
+}
+
+/** A linked evidence connector's status (LIMITATIONS item 8). No token material. */
+export interface ConnectorStatusDto {
+  provider: string;
+  externalLogin: string;
+  scope: string;
+  connectedAt: string;
+}
+
+/** GET /api/connectors — which providers are configured, and what's linked. */
+export interface ConnectorsResponse {
+  /** Whether each provider is configured for a live OAuth flow (else UI stays honest). */
+  configured: { github: boolean };
+  connections: ConnectorStatusDto[];
+}
+
+/** POST /api/connectors/github/import — attach imported GitHub activity to a goal. */
+export interface ImportGithubRequest {
+  goalId: string;
+  checkInId?: string;
+  since?: string;
 }
 
 /**

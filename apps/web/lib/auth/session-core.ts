@@ -15,6 +15,9 @@ export interface SessionData {
   nonce?: string;
   /** The chain id the wallet signed in on. */
   chainId?: number;
+  /** One-time CSRF state for an in-progress GitHub OAuth flow (LIMITATIONS item 8),
+   *  minted by the connector `start` route and verified+cleared by `callback`. */
+  githubOAuthState?: string;
 }
 
 export const SESSION_COOKIE_NAME = "commitai_session";

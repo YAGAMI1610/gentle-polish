@@ -38,6 +38,11 @@ import type {
   VerificationStatus as VerificationStatusView,
   WalletProfile as WalletProfileView,
 } from "@/lib/types/view";
+import {
+  ACHIEVEMENT_CATALOG,
+  isAchievementEarned,
+  type AchievementCounts,
+} from "@/lib/achievements/catalog";
 
 // ---------------------------------------------------------------------------
 // Enum translation (Prisma UPPER_SNAKE → UI union). Record over the full enum
@@ -191,7 +196,18 @@ export function toGoalView(
 // Commitment / Reward
 // ---------------------------------------------------------------------------
 
-export function toCommitmentView(c: CommitmentRow, goalTitle: string): CommitmentView {
+/**
+ * `locked` is passed in by the loader from the indexed `LOCK_FUNDS` transaction
+ * (see `lib/api/loaders.ts`), never inferred from `status`: the row stays at
+ * `CREATED` after a lock, so status alone cannot distinguish "not yet locked"
+ * from "locked". It defaults to `false` so a view built without chain context
+ * (e.g. a pre-broadcast draft) is honestly "not locked".
+ */
+export function toCommitmentView(
+  c: CommitmentRow,
+  goalTitle: string,
+  locked = false,
+): CommitmentView {
   return {
     id: c.id,
     goalId: c.goalId,
@@ -200,6 +216,7 @@ export function toCommitmentView(c: CommitmentRow, goalTitle: string): Commitmen
     reward: weiToTokenNumber(c.rewardWei),
     token: c.token,
     status: commitmentStatusToView(c.status),
+    locked,
     releaseCondition: c.releaseCondition,
     failurePath: c.failurePath,
     // Empty until a real broadcast fills it in (rule 1 — never a placeholder hash).
@@ -333,53 +350,36 @@ export function computeCheckInStreakWeeks(checkInDates: Date[], now: Date): numb
 // Achievements — derived from REAL counts, never stored `earned` flags.
 // ---------------------------------------------------------------------------
 
-export interface AchievementCounts {
-  checkIns: number;
-  verifiedMilestones: number;
-  onChainCommitments: number;
-  goalsCompleted: number;
-  streakWeeks: number;
-}
+export type { AchievementCounts };
 
 /**
- * Derive the achievement list from real per-wallet counts. Thresholds are the
- * catalog (a dedicated catalog table is deferred — see LIMITATIONS.md). No
- * `earnedAt` is fabricated: `earned` is a live function of the counts, and the
- * optional timestamp is simply omitted (we don't persist the crossing moment).
+ * Derive the achievement list from real per-wallet counts, using the shared
+ * `ACHIEVEMENT_CATALOG` as the single source of truth for ids / metadata / the
+ * `metric >= threshold` earn rule (build item 7 — the catalog is mirrored into the
+ * `AchievementDefinition` table so code and DB can't drift).
+ *
+ * `earned` is a live function of the counts. `earnedAt`, when the caller supplies
+ * the persisted first-observation map, is attached ONLY to already-earned entries —
+ * it is a real recorded crossing timestamp, never fabricated (CLAUDE.md rule 1). A
+ * caller with no persistence (or an entry with no recorded crossing yet) simply
+ * omits the key.
  */
-export function deriveAchievements(counts: AchievementCounts): AchievementView[] {
-  return [
-    {
-      id: "first-check-in",
-      name: "First honest check-in",
-      description: "Logged your first check-in against a goal.",
-      earned: counts.checkIns >= 1,
-    },
-    {
-      id: "ten-verified-milestones",
-      name: "Ten verified milestones",
-      description: "Ten milestones passed verification with evidence.",
-      earned: counts.verifiedMilestones >= 10,
-    },
-    {
-      id: "skin-in-the-game",
-      name: "Skin in the game",
-      description: "Opened your first on-chain self-commitment.",
-      earned: counts.onChainCommitments >= 1,
-    },
-    {
-      id: "finished-what-you-started",
-      name: "Finished what you started",
-      description: "Completed a goal all the way to its deadline.",
-      earned: counts.goalsCompleted >= 1,
-    },
-    {
-      id: "season-of-consistency",
-      name: "A season of consistency",
-      description: "Twelve consecutive weeks with a check-in.",
-      earned: counts.streakWeeks >= 12,
-    },
-  ];
+export function deriveAchievements(
+  counts: AchievementCounts,
+  earnedAt?: ReadonlyMap<string, Date>,
+): AchievementView[] {
+  return ACHIEVEMENT_CATALOG.map((def) => {
+    const earned = isAchievementEarned(def, counts);
+    const at = earned ? earnedAt?.get(def.id) : undefined;
+    return {
+      id: def.id,
+      name: def.name,
+      description: def.description,
+      earned,
+      // exactOptionalPropertyTypes: only attach when a real crossing was recorded.
+      ...(at ? { earnedAt: at.toISOString() } : {}),
+    };
+  });
 }
 
 /**

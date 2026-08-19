@@ -61,7 +61,8 @@ export function parseId(name: string, raw: string): bigint {
 /** Parse a decimal BOT amount (e.g. "1.5") into wei. */
 export function parseAmountWei(name: string, raw: string): bigint {
   const v = raw.trim();
-  if (!/^\d+(\.\d+)?$/.test(v)) usage(`--${name} must be a non-negative decimal amount, got "${raw}"`);
+  if (!/^\d+(\.\d+)?$/.test(v))
+    usage(`--${name} must be a non-negative decimal amount, got "${raw}"`);
   try {
     return parseEther(v);
   } catch {
@@ -96,7 +97,9 @@ export function parseDeadline(name: string, raw: string): bigint {
   }
   const nowSeconds = Math.floor(Date.now() / 1000);
   if (seconds <= nowSeconds) {
-    usage(`--${name} is in the past (${new Date(seconds * 1000).toISOString()}); use 0 for open-ended`);
+    usage(
+      `--${name} is in the past (${new Date(seconds * 1000).toISOString()}); use 0 for open-ended`,
+    );
   }
   return BigInt(seconds);
 }
@@ -166,7 +169,10 @@ export function formatGoal(id: bigint, g: Record<string, unknown>): string {
 }
 
 /** Render the milestone records for a goal. */
-export function formatMilestones(goalId: bigint, records: readonly Record<string, unknown>[]): string {
+export function formatMilestones(
+  goalId: bigint,
+  records: readonly Record<string, unknown>[],
+): string {
   if (records.length === 0) return `Goal #${goalId}: no milestones registered`;
   const rows = records.map(
     (m, i) =>

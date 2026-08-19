@@ -10,7 +10,15 @@ import {
   DEFAULT_CONFIDENCE_THRESHOLD,
 } from "../../lib/ai/verification/confidence";
 import { hashToBytes32, milestoneRefFromId } from "../../lib/chain/index";
-import { emit, printHelp, usage, fail, contentFromSources, EXIT_OK, type GlobalOptions } from "../runtime";
+import {
+  emit,
+  printHelp,
+  usage,
+  fail,
+  contentFromSources,
+  EXIT_OK,
+  type GlobalOptions,
+} from "../runtime";
 import { parse, requirePositional, parsePercent, parseSignalLevel, requireHash64 } from "../format";
 
 export const HELP = `
@@ -150,7 +158,8 @@ function runConfidence(args: string[], global: GlobalOptions): number {
 
 function requireLevel(values: Record<string, unknown>, name: string): string {
   const v = values[name];
-  if (typeof v !== "string" || v === "") usage(`missing required option --${name} (low|medium|high)`);
+  if (typeof v !== "string" || v === "")
+    usage(`missing required option --${name} (low|medium|high)`);
   return v;
 }
 

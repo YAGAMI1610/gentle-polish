@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, ExternalLink, Loader2, PenLine, Wallet } from "lucide-react";
+import { ArrowRight, ExternalLink, Loader2, Lock, PenLine, Wallet } from "lucide-react";
 import { useState } from "react";
 import { parseEther } from "viem";
 
@@ -497,6 +497,13 @@ function CommitmentCard({ commitment }: { commitment: Commitment }) {
                 <span className="font-mono">{formatTxHash(chainTx.data.txHash)}</span> — funds
                 locked
               </a>
+            ) : commitment.locked ? (
+              // Persisted from the indexed LOCK_FUNDS tx — survives reload, so the
+              // Lock button is never re-offered for funds already locked.
+              <p className="inline-flex items-center gap-2 text-xs font-medium text-chain">
+                <Lock className="size-3.5" aria-hidden />
+                Funds locked on-chain.
+              </p>
             ) : (
               <>
                 <Button

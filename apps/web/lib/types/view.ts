@@ -56,6 +56,16 @@ export interface Commitment {
   reward: number;
   token: string;
   status: "active" | "completed" | "cancelled";
+  /**
+   * True once the principal has really been locked on-chain, derived from an
+   * indexed `LOCK_FUNDS` transaction (a real broadcast receipt) — NOT from
+   * `status`. The commitment lifecycle deliberately leaves the DB row at
+   * `CREATED` after a lock (the on-chain id is back-filled without flipping
+   * status), so `status === "active"` cannot tell "not yet locked" from
+   * "locked". The UI gates the Lock button on `!locked` so it does not
+   * re-offer a lock the depositor has already funded (survives page reload).
+   */
+  locked: boolean;
   releaseCondition: string;
   failurePath: string;
   txHash: string;

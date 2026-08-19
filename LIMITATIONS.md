@@ -57,10 +57,12 @@ render only when a real broadcast `txHash` exists (rule 1).
 `ConfidenceMeter value={89}`), `/verify` (`VerifyPage`: real `POST /api/evidence` upload), and the
 `CreateCommitmentFlow` + Lock/Claim actions on `/commitments` and `/rewards` (prepare → the user's
 own wallet signs → the real broadcast hash is recorded via `POST /api/chain/record`). The labelled
-"mock confirmation" and the `0x…0000` pattern on `CreateCommitmentFlow` are **gone**. Two honest
-residuals remain, both documented in §17: the `/verify` "Connect data" tab is a disabled preview of
-future connectors (written note + file upload are fully real), and the Lock button gates on
-`status==="active"` rather than a per-commitment locked flag the view type doesn't yet carry.
+"mock confirmation" and the `0x…0000` pattern on `CreateCommitmentFlow` are **gone**. On `/verify` the
+GitHub "Connect data" option is now a real OAuth-backed evidence source (RESOLVED 2026-08-19, item 8, §17);
+the fitness and reading connectors remain honest disabled previews (written note + file upload are fully
+real). The Lock button now gates on a
+persisted `Commitment.locked` flag derived from the indexed `LOCK_FUNDS` tx (RESOLVED 2026-08-19,
+§17), not on `status`, so a reload no longer re-offers a lock the depositor has already funded.
 
 ## 2. Smart contract: built, tested, and deployed to BOT Chain testnet
 
@@ -100,10 +102,16 @@ testnet deployment the `owner`, the `attestor`, and the deployer are the **same*
 (`0xae5c…7607`). It is money-safe: neither `owner` nor `attestor` has any code path to move a
 depositor's funds — the contract makes every transfer depositor-signed and pull-based
 (invariant proved in `contractClient.safety.test.ts` and the Foundry suite). But collapsing
-the three roles removes defence-in-depth. For production: use a distinct owner (ideally a
-multisig), a separate attestor key held only by the backend, and rotate the attestor key. The
-deployer/attestor key and the API keys shared during this build session appeared in chat and
-**must be rotated** before any non-throwaway use.
+the three roles removes defence-in-depth. **Code-prep landed (2026-08-19, items 3 & 4):** the
+deploy script now _enforces_ distinct deployer/owner/attestor by default — `Deploy.validateRoles`
+(pure, unit-tested in `contracts/test/Deploy.t.sol`, 6 tests) reverts before any broadcast unless
+`ALLOW_COLLAPSED_ROLES=true` is explicitly set — and `contracts/DEPLOY.md` documents the
+distinct-EOA + Safe-multisig-owner setup (constructor sets the owner directly, so a Safe can own
+from block 0; Ownable2Step for a later hand-off) and the attestor-rotation procedure. What remains
+is the user's to do and is deliberately NOT automated: rotate the exposed deployer/attestor key
+(item 1) and **redeploy** with three distinct, rotated accounts (a broadcast needing a funded
+wallet). The exposed keys and API keys shared during this build session **must be rotated** before
+any non-throwaway use.
 
 The frontend now consumes the deployed vault through the real prepare-sign-record flows wired in
 step 9 phase 3 (see §1, §17) — no placeholder chain data remains. The explorer helpers resolve to
@@ -113,19 +121,24 @@ and explorer-verified (rule 1). The backend contract client that consumes the de
 itself built and tested, and its live chain reads work — see §14.
 
 **How to (re)deploy your own instance (needs a funded key — never paste one in-transcript):**
-From a local checkout:
+The full runbook — role model, Safe-multisig owner setup, attestor rotation, and the escrow-fix
+redeploy checklist — is in **`contracts/DEPLOY.md`**. In short, from a local checkout:
 
 ```bash
 cd contracts
 cp .env.example .env            # then edit .env:
-#   PRIVATE_KEY=<your funded testnet key>   (get tBOT: https://faucet.botchain.ai/basic)
-#   INITIAL_ATTESTOR=<backend attestor address>
+#   PRIVATE_KEY=<your funded, ROTATED testnet key>   (get tBOT: https://faucet.botchain.ai/basic)
+#   INITIAL_OWNER=<Safe multisig address>            (distinct from deployer)
+#   INITIAL_ATTESTOR=<backend attestor address>      (distinct from deployer and owner)
+forge test                      # 51 tests must pass first
 forge script script/Deploy.s.sol:Deploy --rpc-url botchain_testnet --broadcast -vvvv
 ```
 
-The broadcast prints the deployed address + tx hash; those go into `README.md` and the
-frontend/`contractClient` config. BOT Chain testnet params are live-verified in
-`.env.example` (chain id 968, RPC `https://rpc.bohr.life`).
+The deploy script's `validateRoles` gate refuses a collapsed-role deploy unless
+`ALLOW_COLLAPSED_ROLES=true` is set. The broadcast prints the deployed address + tx hash; those go
+into `README.md` and the frontend/`contractClient` config, and the new instance should be checked
+for the escrow fix (`withdrawEscrow()` present) per DEPLOY.md. BOT Chain testnet params are
+live-verified in `.env.example` (chain id 968, RPC `https://rpc.bohr.life`).
 
 ## 3. Wallet connection — real as of step 9 (phase 1)
 
@@ -507,8 +520,18 @@ and cross-wallet attaches throw `WalletScopeError`.
   upload handler + the wallet-connect/SIWE UI that authenticates the caller are **step 9** — write
   endpoints must not land before SIWE/CSRF are in place (see §4). The pipeline is written so that
   route becomes a thin wrapper over already-tested logic.
-- **Only the local-disk driver ships.** An S3/Supabase driver is a new class behind the same
-  interface plus a `switch` case in `getEvidenceStorage()` — a config change, not a pipeline change.
+- **Local-disk AND S3-compatible drivers ship — RESOLVED (2026-08-19, item 9).** `EVIDENCE_STORAGE_DRIVER`
+  selects the backend: `local` (default) or `s3`. The `S3EvidenceStorage` driver is real (rule 1) —
+  authenticated with a from-scratch **AWS Signature V4** implementation over `fetch` (no SDK, zero new
+  deps), so it works against AWS S3, Supabase Storage's S3 endpoint, Cloudflare R2, and MinIO. Both drivers
+  implement the same interface and emit the identical content-addressed, wallet-namespaced `storageKey`, so
+  the DB pointer is driver-agnostic and switching is config-only. Honest gating (mirrors `chain/config`):
+  `s3` selected with a missing `EVIDENCE_S3_*` var throws loudly, never a silent fallback; the credential
+  is read separately and moves blobs only, never funds (rules 1/3). Tests (all always-on, no mocks):
+  `sigv4.test.ts` pins the signer to **AWS's own published `get-vanilla` known-answer vector** (proves the
+  signature is the real algorithm, not an approximation), `config.test.ts` (7) the honesty contract,
+  `s3Storage.test.ts` (7) request shaping + status mapping via an injected transport (the connectors DI
+  idiom), and `index.test.ts` (4) that the factory selects each driver by config alone.
 - **Content hardening is deferred.** MIME is checked against an allowlist and total size is capped
   (`MAX_EVIDENCE_BYTES`), but deep content-sniffing, virus scanning, and EXIF/metadata scrubbing are
   production follow-ups (step 9 / hardening), noted here rather than silently skipped.
@@ -689,10 +712,13 @@ profile}/route.ts`. Each resolves the SIWE wallet, calls a loader, and funnels a
 
 **No fakes — derived, not fabricated (rule 1):**
 
-- **Achievements are derived from real counts**, never stored `earned` flags: `deriveAchievements`
-  is a live function of the wallet's check-ins / verified milestones / on-chain commitments /
-  completed goals / streak weeks. No `earnedAt` is fabricated — the crossing moment is not
-  persisted, so the optional timestamp is simply omitted and the UI shows "Earned" without a date.
+- **Achievements: `earned` is derived from real counts; the earned-AT is now persisted (item 7).**
+  `deriveAchievements` stays a live function of the wallet's check-ins / verified milestones /
+  on-chain commitments / completed goals / streak weeks — the `earned` boolean is never a stored
+  flag. The crossing moment is now recorded the first time it is observed (`EarnedAchievement`,
+  write-once) and read back, so an earned achievement carries its genuine first-observation
+  `earnedAt`. It is still never fabricated: an earned achievement whose crossing has not yet been
+  persisted omits the timestamp rather than inventing one.
 - **Rewards are a view over the commitment reward leg** (APPROVED + not-withdrawn ⇒ claimable,
   `rewardWithdrawn` ⇒ claimed), not a balance table (§9). `earnedAt`/`claimedAt` derive from the
   commitment's `updatedAt` — the only real timestamp available without a dedicated column.
@@ -709,14 +735,45 @@ in `lib/**` that use the words "fake"/"mock"/"hardcoded" only to state the code 
 
 **Honest deferrals (rules 1 & 6 — real interface now, gap recorded here):**
 
-- **The loaders do per-goal follow-up reads (N+1).** `loadGoalViews` fetches milestones /
-  verifications / strategy / commitment per goal rather than in one batched query. It is correct and
-  wallet-scoped, but not optimised; batching (a single grouped query or a DataLoader) is a
-  performance follow-up, noted rather than silently shipped as "fine". At demo scale it is
-  immaterial.
-- **No dedicated achievements-catalog table.** Thresholds live in `deriveAchievements`; a catalog
-  table with per-achievement metadata and a persisted earned-at is deferred (the derivation is
-  real).
+- **The loaders do per-goal follow-up reads (N+1) — RESOLVED (2026-08-19).** `loadGoalViews`
+  previously fetched milestones / verifications / strategy / commitment with one read _per goal_
+  (4N+1 queries); it now issues **five queries total, independent of goal count** — one `listGoals`
+  plus one grouped `IN (...)` query each for milestones, verification records, strategies, and
+  commitments — and the commitment/reward list loaders resolve every goal title through a single
+  `getGoalsForIds` instead of a `getGoal` per row. The split is done by two pure, always-on-tested
+  helpers (`lib/db/repositories/grouping.ts`: `groupByKey` / `indexByKey`) that preserve each query's
+  SQL sort order within a group, so the batched assembly is byte-for-byte what the per-goal reads
+  produced. A shared `assembleGoalView` is used by both the single-goal loader and the batched list
+  loader, so they cannot drift. Each grouped repo helper (`listMilestonesForGoals`,
+  `listVerificationRecordsForGoals`, `getVerificationStrategiesForGoals`, `getCommitmentsForGoals`,
+  `getGoalsForIds`) stays wallet-scoped (a goalId this wallet does not own contributes no rows) and
+  short-circuits an empty id list to an empty map with no query. The single-item detail loaders
+  (`loadGoalView`, `loadCommitmentView`) keep their direct per-id reads — a handful of queries for the
+  one row a detail route needs. **Tests:** `grouping.test.ts` (6 always-on — empty maps, order
+  preservation within a group on interleaved rows, one-per-key, first-wins) run green; a DB-gated
+  `lib/api/loaders.integration.test.ts` (6 tests) proves `loadGoalViews` assembles **identically** to
+  per-goal `loadGoalView` (deep-equal), that milestone order / latest-verification-per-milestone /
+  strategy / commitment id are correct, that the commitment/reward loaders resolve titles through the
+  batch, and that every batch helper ignores a foreign wallet's goalId — it skips cleanly here (no
+  Postgres, §8). Gates: `pnpm --filter web typecheck`, `lint`, and `pnpm format:check` clean; `pnpm
+--filter web test` = **273 passed | 63 skipped** (exit 0).
+- **No dedicated achievements-catalog table — RESOLVED (2026-08-19).** The earn thresholds now live
+  in one code source of truth (`lib/achievements/catalog.ts` — `ACHIEVEMENT_CATALOG` plus the
+  predicates `isAchievementEarned` / `earnedAchievementIds`), mirrored into an `AchievementDefinition`
+  TABLE by an idempotent `syncAchievementCatalog` upsert (memoized once per process) so code and DB
+  cannot drift, and a new `EarnedAchievement` table persists the first-observation crossing per
+  (wallet, achievement). `loadAchievementViews` records any newly-earned crossings with
+  `createMany({ skipDuplicates: true })` (first-writer-wins ⇒ the timestamp is write-once and never
+  moves) then reads them back, and `deriveAchievements(counts, earnedAt)` attaches the stored
+  `earnedAt` only to currently-earned achievements — the `earned` boolean itself stays a live
+  computation from real counts (never a stored flag), and no timestamp is ever fabricated (rule 1).
+  Migration `20260819120000_add_achievements_catalog`. **Tests:** `serializers.test.ts` gains
+  always-on coverage of the earned-at attachment (attaches only to earned entries; omits it for an
+  earned-but-not-yet-persisted entry; ignores a stored crossing for an unearned entry); a DB-gated
+  `lib/db/repositories/achievements.test.ts` (7 tests) proves the catalog sync is idempotent with one
+  row per entry, and that crossings are write-once, first-writer-wins, idempotent, and wallet-scoped
+  — it skips cleanly here (no Postgres, §8). Gates: `pnpm --filter web typecheck`, `lint`, and `pnpm
+format:check` clean; `pnpm --filter web test` = **275 passed | 70 skipped** (exit 0).
 - **Cross-wallet non-leak is proven at the serializer/repository layer** (§9) and enforced by the
   wallet-scoped repositories the loaders call. End-to-end HTTP-boundary tests (A's session reading
   B's row → 404) are the **phase 4 / step 10** §13 suite; they are DB-gated (§8).
@@ -763,7 +820,9 @@ own wallet signs it. No route instantiates a fund-signing client, and `getAttest
 4-method surface (none of which move value) is the only key the backend holds (§14, proved in
 `contractClient.safety.test.ts`). When the chain isn't configured or a goal isn't on-chain yet, the
 `prepare*` routes return an honest `{prepared:false, reason}` and the UI shows that reason — never a
-fabricated hash or a "mock confirmation" (rule 1).
+fabricated hash or a "mock confirmation" (rule 1). The "not on-chain yet" case is now transient: the
+on-chain-id back-fill (below) writes the emitted id onto the row as soon as the registration/creation
+tx is indexed, after which `prepare*` returns real calldata.
 
 **Untrusted input (rule 5):** check-in and chat messages reach `runTurn` as the user message, which
 the runner wraps server-side; evidence text/files flow through `storeEvidence`, stored byte-for-byte
@@ -773,23 +832,88 @@ the app (it names the selected goal), not user text, and is appended as a system
 
 **Honest deferrals (rules 1 & 6 — real interface now, gap recorded here):**
 
-- **On-chain-id back-fill seam.** No route yet back-fills `onchainGoalId` / `onchainCommitmentId`
-  onto a DRAFT row after the depositor broadcasts `registerGoal` / `createCommitment`. So for an
-  app-created goal that has not been registered on-chain, `prepareCreateCommitment` /
-  `prepareLockFunds` / `prepareClaimReward` honestly return `{prepared:false, reason}` (the calldata
-  needs the real on-chain id), and the UI surfaces that reason. The production fix is a small indexer
-  step: on `recordChainTx` for a `REGISTER_GOAL` / `CREATE_COMMITMENT` kind, parse the emitted id from
-  the receipt logs and write it back onto the row. Recorded, not silently dropped.
-- **`/verify` "Connect data" tab is a disabled preview.** Automatic connectors (GitHub / fitness /
-  reading-app) are shown disabled with a note pointing here; the written-note and file-upload tabs are
-  fully real (`POST /api/evidence`). Production fix: implement each connector as an OAuth-backed
-  evidence source that writes real `Evidence` rows through the same pipeline.
-- **Lock button gates on `status`, not a per-commitment locked flag.** The `Commitment` view type
-  carries no "funds already locked on-chain" boolean, so the Lock action is shown while
-  `status==="active"` and hidden once this session records a lock. A double-lock attempt is still
-  safe — it reverts on-chain and the backend signs nothing — but the button can't perfectly pre-gate
-  it. Production fix: add a locked-state field to the commitment view (derived from the indexed
-  `LOCK_FUNDS` `ChainTransaction`) and gate on it.
+- **On-chain-id back-fill — RESOLVED (2026-08-19).** `POST /api/chain/record` now back-fills
+  `onchainGoalId` / `onchainCommitmentId` onto the owning DRAFT row after the depositor broadcasts
+  `registerGoal` / `createCommitment`. On recording a `REGISTER_GOAL` / `CREATE_COMMITMENT` hash the
+  route re-reads the receipt (`readTransactionReceipt`) and decodes the id the vault _emitted_
+  (`parseGoalRegistered` / `parseCommitmentCreated`), then writes it via the wallet-scoped setters
+  `setOnchainGoalId` / `setOnchainCommitmentId` (`lib/api/onchainBackfill.ts` orchestrates). The id
+  comes from the chain, never the client: a decoded log counts only if it was emitted by the configured
+  vault AND names the recording wallet as `owner`/`depositor`, so a same-signature log from another
+  contract or a stranger's receipt is ignored (rule 2). The setters are first-writer-wins — the
+  `onchain*Id: null` guard makes a replay/re-record idempotent, and the wallet stays in the filter so a
+  cross-wallet call touches zero rows. Only the id is written; the commitment `status` stays `CREATED`
+  (funds lock later in `lockFunds`), so the Lock-button gating below is unaffected. Writing an id moves
+  nothing — it only unblocks the depositor's own `prepare*` calldata, which their wallet still signs
+  (rules 1–3). Back-fill is best-effort: a transient receipt-read failure never fails the already-durable
+  index write — it is reported in `ChainRecordResult.backfillReason` and filled on a later re-record (or
+  by the §16 reconciler once built). Net effect: `prepareCreateCommitment` / `prepareLockFunds` /
+  `prepareClaimReward` flip from `{prepared:false}` to real calldata as soon as the registration/creation
+  tx is indexed. Tests: `lib/chain/contractClient.parsers.test.ts` (7 always-on — decode + vault-address
+  spoof filter), `lib/api/onchainBackfill.test.ts` (11 always-on — kind/config gating, owner/depositor
+  match, idempotent reporting, best-effort throw), `lib/db/repositories/onchainId.integration.test.ts`
+  (4 DB-gated — first-writer-wins, wallet-scoping, status-stays-`CREATED`).
+- **`/verify` "Connect data" tab — GitHub connector RESOLVED (2026-08-19, item 8); fitness/reading still
+  previews.** The GitHub option is now a **real, end-to-end OAuth-backed evidence source** (rule 1 — no
+  mock), gated honestly: unset OAuth env → the card shows a disabled Connect button and a "not enabled on
+  this deployment" note, and `/api/connectors/github/start` returns **503** rather than pretending. What
+  ships:
+  - **Real authorization-code flow, 5 routes.** `GET /api/connectors` (configured flag + wallet's live
+    connection status, never the token); `GET /api/connectors/github/start` (`requireWallet`, 503 if
+    unconfigured, mints CSRF **state** into the encrypted iron-session, 302 → GitHub authorize with
+    `allow_signup=false`); `GET /api/connectors/github/callback` (verifies state with `timingSafeEqual`
+    fail-closed, exchanges the code, reads the login, upserts, then **always** redirects to
+    `/verify?connect=github&status=connected|denied|mismatch|error`); `POST /api/connectors/github/import`
+    (`assertSameOrigin` + `requireWallet`); `DELETE /api/connectors/github` (disconnect, idempotent).
+  - **Money-safety (rules 1–3): the token can never move funds and is never stored plaintext.** The scope
+    is read-only (`read:user`); the OAuth token is encrypted **at rest** with AES-256-GCM
+    (`iv.tag.ciphertext`, key `scrypt`-derived from `CONNECTOR_TOKEN_SECRET`‖`SESSION_PASSWORD`), decrypts
+    only server-side via `getConnectorToken`, and never appears in any status DTO or log. It grants read
+    access to GitHub activity only — no code path lets it touch a wallet or the vault.
+  - **Import writes a real `Evidence` row through the SAME pipeline as an upload** — never fabricated. It
+    fetches the user's recent events, summarises them deterministically (commits, PRs opened/merged,
+    distinct sorted repos, time window), and stores that as a `GITHUB`-type evidence text via
+    `storeEvidence` — so it is hashed off-chain exactly like a written note, and only the hash is
+    anchorable on-chain. If no token is stored it throws `ConnectorNotConnectedError` → **409**, never a
+    stub result. Imported GitHub content is evidence **data**, so when the AI later assesses it, it passes
+    through the same `wrapEvidence` SYSTEM/DATA boundary (rule 5) — never treated as instructions.
+  - **Schema + persistence.** New `EvidenceConnector` model + `ConnectorProvider` enum (migration
+    `20260819130000_add_evidence_connectors`), wallet-scoped, `@@unique([walletAddress, provider])`,
+    `onDelete: Cascade`. Repo helpers `upsertConnector` / `getConnectorStatus` / `listConnectors` /
+    `getConnectorToken` / `deleteConnector` are all `evmAddressSchema`-scoped.
+  - **UI.** A live GitHub card (Connect → `/start`; when connected: _Import latest activity_ + _Disconnect_)
+    plus a one-time OAuth result banner read from the callback's `?connect=github&status=` and scrubbed off
+    the URL. The **fitness-tracker and reading-app cards remain honestly disabled previews** — no OAuth app
+    or API integration exists for them yet; the production fix is this same per-provider OAuth pattern.
+  - **Tests (all real).** Always-on: `lib/connectors/config.test.ts` (9 — honest unset→null / malformed→
+    throw), `crypto.test.ts` (8 — GCM round-trip, random IV, tamper/wrong-key/malformed all throw),
+    `state.test.ts` (2 — CSRF state fail-closed), `github.test.ts` (12 — authorize URL, token-response
+    parsing incl. GitHub's 200-with-`error` shape, event summariser, injected-transport IO), `import.test.ts`
+    (3 — orchestrator control flow incl. the never-fabricate path). DB-gated `lib/db/repositories/
+connectors.test.ts` proves the token is **stored encrypted** (raw row never contains the plaintext),
+    round-trips only via `getConnectorToken`, is strictly wallet-scoped, and disconnect is idempotent
+    (skips here — no Postgres). Full suite: **309 passed | 74 skipped**, `typecheck`/`lint`/`format:check`
+    clean.
+- **Lock button gates on a per-commitment locked flag — RESOLVED (2026-08-19).** The `Commitment`
+  view type now carries a `locked: boolean`, derived from an indexed `LOCK_FUNDS`
+  `ChainTransaction` (a real broadcast receipt — rule 1), NOT from `status`. This matters because
+  the lifecycle deliberately leaves the DB row at `CREATED` after a lock (the on-chain id is
+  back-filled without flipping status — §17 back-fill / item 2), so `status==="active"` cannot tell
+  "not yet locked" from "locked". Implementation: two wallet-scoped repo helpers in
+  `lib/db/repositories/chainTx.ts` — `isCommitmentLocked(wallet, id)` for the detail view and
+  `listLockedCommitmentIds(wallet)` for the list view (one grouped query, so surfacing the flag
+  across many commitments adds no per-commitment N+1); `toCommitmentView(c, goalTitle, locked=false)`
+  threads it in; `loadCommitmentView`/`loadCommitmentViews` in `lib/api/loaders.ts` supply it; and
+  `CommitmentsPage.tsx` shows the Lock button only when `!commitment.locked` (so a page reload no
+  longer re-offers a lock the depositor has already funded — the previous client-only signal was
+  lost on reload). A double-lock was already safe (it reverts on-chain and the backend signs
+  nothing); this now also pre-gates it correctly and persistently. Tests: always-on
+  `lib/api/serializers.test.ts` proves `locked` defaults to `false` and is never inferred from status
+  (an `ACTIVE` row still reads `locked:false`) and reflects the caller-supplied flag on a `CREATED`
+  row (35 passed, exit 0); DB-gated `lib/db/repositories/chainTx.test.ts` proves `isCommitmentLocked`
+  tracks the indexed `LOCK_FUNDS` tx (not status), is wallet-scoped, and `listLockedCommitmentIds`
+  returns exactly this wallet's locked ids de-duplicated (registered + skip-gated here for lack of a
+  local Postgres, same as the rest of the DB-gated suite).
 
 **How the tests are gated (this phase):** always-on route tests drive the auth/origin/error mapping
 and the `storeEvidence` 413/415 mapping through the real mapper without a DB; the prepare-only proof
@@ -884,10 +1008,11 @@ let it through).
   duplicate-completion invariants are the `contracts/` Foundry suite (§2); this TypeScript suite re-asserts
   only the backend-side capability surface (frozen attestor, prepare-only encoders) and cites the Foundry
   tests rather than re-implementing them.
-- **No dedicated achievements-catalog table** (carried forward from §16): achievement thresholds remain
-  derived in `deriveAchievements`, not stored in a catalog table with persisted earned-at metadata. The
-  derivation is real; the table is the production follow-up. This is orthogonal to §13 but is the one open
-  scope item the security pass did not close.
+- **No dedicated achievements-catalog table — RESOLVED (2026-08-19)** (carried forward from §16, now
+  closed): an `AchievementDefinition` catalog table (mirrored from the `ACHIEVEMENT_CATALOG` code
+  source of truth) plus an `EarnedAchievement` table now persist per-achievement metadata and a
+  write-once first-observation `earnedAt`. The `earned` boolean stays a live derivation; the crossing
+  timestamp is real, never fabricated. See §16 for the full description and gate output.
 
 **Grep-gate state after this phase** (`grep -rniE "mock|fake|TODO: real|hardcoded|demo-data|example-botchain"`
 over `apps/web`, excluding `node_modules`/`.next`): production (non-test) source is unchanged from §17 — every
@@ -934,16 +1059,21 @@ and points here for the production hardening. That record:
   would additionally unlock is paying an _unverified_ reward out of a sponsor's money.
 - **Testnet opsec simplification (cross-ref §2).** On this deployment `owner`, `attestor`, and deployer are
   the **same** account (`0xae5c…7607`). Money-safe (neither role can move a depositor's funds) but it removes
-  defence-in-depth, and the key appeared in this build transcript so it **must be rotated**.
+  defence-in-depth, and the key appeared in this build transcript so it **must be rotated**. **Code-prep
+  landed (2026-08-19):** the deploy script now enforces distinct roles by default (`Deploy.validateRoles`,
+  6 tests) and `contracts/DEPLOY.md` documents the distinct-EOA + Safe-multisig setup; applying it on-chain
+  is the user's rotate-key redeploy (a funded broadcast, not automated here).
 - **Production fix.** (1) Make the attestor a **multi-sig or M-of-N threshold** signer rather than a single
   key. (2) Carry a **per-approval signed verification receipt**: have `approveCompletion` (or a wrapper)
   require a signature over `{goalId, milestoneId, confidence, evidenceHash, modelVersion}` so the on-chain
   approval is cryptographically bound to a specific, auditable AI decision — closing the "confidence value is
   trusted" gap above. (3) Use a **distinct owner** (ideally a multi-sig) separate from the attestor, hold the
   attestor key only in the backend, and **rotate** it (the contract already exposes `setAttestor`, which
-  cannot block or redirect a withdrawal). (4) Optionally add a **challenge/dispute window** before
-  `Approved` unlocks withdrawals. None of these change the money-safety invariants — they harden _who_ may
-  attest and _how provably_, not _where funds can go_.
+  cannot block or redirect a withdrawal). **The deploy tooling now enforces (3) by default** —
+  `Deploy.validateRoles` rejects a collapsed-role deploy unless `ALLOW_COLLAPSED_ROLES=true`, and
+  `contracts/DEPLOY.md` gives the Safe-multisig-owner runbook. (4) Optionally add a **challenge/dispute
+  window** before `Approved` unlocks withdrawals. None of these change the money-safety invariants — they
+  harden _who_ may attest and _how provably_, not _where funds can go_.
 
 ### 19.2 Complete simplifications index (every deferral in this repo → its section and production fix)
 
@@ -952,28 +1082,43 @@ section; nothing here is new scope, and nothing below is a fake presented as wor
 
 - **Attestor trust model** — single attestor, off-chain AI→attestor binding, no self-attestation fallback
   (by design). Fix: threshold attestor + signed verification receipts. → §19.1, §2, §14.
-- **Attestor = owner = deployer on testnet**, and the key was exposed in-transcript. Fix: separate roles,
-  rotate. → §2.
-- **On-chain id back-fill seam.** No indexer step writes `onchainGoalId` / `onchainCommitmentId` back onto a
-  DRAFT row after the depositor broadcasts `registerGoal` / `createCommitment`, so `prepare*` for a
-  not-yet-registered goal honestly returns `{prepared:false, reason}`. Fix: parse the emitted id from the
-  receipt logs on `recordChainTx`. → §17.
+- **Attestor = owner = deployer on testnet**, and the key was exposed in-transcript. **Code-prep landed
+  (2026-08-19, items 3 & 4):** `Deploy.validateRoles` enforces three distinct accounts by default (6 tests)
+  and `contracts/DEPLOY.md` documents the distinct-EOA + Safe-multisig-owner setup. Remaining = the user's
+  rotate-key redeploy (a funded broadcast, not automated). → §2, §19.1.
+- **On-chain id back-fill — RESOLVED (2026-08-19).** `POST /api/chain/record` re-reads the receipt for a
+  `REGISTER_GOAL` / `CREATE_COMMITMENT` hash, decodes the vault-emitted id (owner/depositor must match the
+  recording wallet; foreign/spoofed logs ignored), and writes it onto the row via wallet-scoped
+  first-writer-wins setters, so `prepare*` flips from `{prepared:false}` to real calldata once the tx is
+  indexed. `lib/api/onchainBackfill.ts`; tests: parsers (7) + orchestrator (11) always-on, setters (4)
+  DB-gated. → §17.
 - **No historical event backfill / chain-sync loop.** State is indexed at broadcast time only. Fix: an
   event-replay reconciler. → §14.
 - **EVM address validation is format-only** (no EIP-55 checksum), though SIWE now supplies real wallet
   ownership. → §9.
 - **Evidence content hardening deferred** — MIME allowlist + size cap ship; deep content-sniffing, virus
   scanning, and EXIF/metadata scrubbing do not. Fix: add these at the upload boundary. → §13.
-- **Only the local-disk storage driver ships.** Fix: an S3/Supabase driver behind the same
-  `EvidenceStorage` interface. → §13.
-- **`/verify` "Connect data" tab is a disabled preview** (GitHub / fitness / reading connectors); written
-  note + file upload are fully real. Fix: OAuth-backed evidence sources through the same pipeline. → §17.
-- **Lock button gates on `status`, not a per-commitment locked flag** (a double-lock is still safe — it
-  reverts on-chain). Fix: add a locked-state field derived from the indexed `LOCK_FUNDS` tx. → §17.
-- **Loaders do per-goal follow-up reads (N+1).** Correct and wallet-scoped, not batched. Fix: a grouped
-  query / DataLoader. → §16.
-- **No dedicated achievements-catalog table** — thresholds are derived live in `deriveAchievements`, with no
-  persisted earned-at. The derivation is real. Fix: a catalog table + persisted crossing timestamps. → §16.
+- **Local-disk + S3-compatible storage drivers — RESOLVED (2026-08-19, item 9).** `EVIDENCE_STORAGE_DRIVER`
+  selects `local` (default) or a real `s3` driver (from-scratch AWS SigV4 over `fetch`, no SDK; works with
+  AWS S3 / Supabase / R2 / MinIO). Same interface, same content-addressed key, so switching is config-only;
+  honest fail-loud on missing `EVIDENCE_S3_*`. Signer pinned to AWS's published SigV4 vector. → §13.
+- **`/verify` "Connect data" — GitHub connector RESOLVED (2026-08-19, item 8).** GitHub is now a real
+  OAuth-backed evidence source (read-only scope; token AES-256-GCM-encrypted at rest, never fund-capable;
+  activity summarised → stored as a `GITHUB` `Evidence` row through the same hashing pipeline as an upload;
+  CSRF state fail-closed; honest 503 when unconfigured). Fitness/reading connectors remain disabled
+  previews — same OAuth pattern is their fix. → §17.
+- **Lock button gates on a per-commitment locked flag — RESOLVED (2026-08-19).** `Commitment.locked`
+  is derived from the indexed `LOCK_FUNDS` tx (not `status`, which stays `CREATED` after a lock);
+  the button shows only when `!locked`, so a reload no longer re-offers a funded lock. → §17.
+- **Loaders do per-goal follow-up reads (N+1) — RESOLVED (2026-08-19).** `loadGoalViews` now runs five
+  grouped queries total regardless of goal count (was 4N+1); commitment/reward loaders batch every goal
+  title via `getGoalsForIds`. Pure `groupByKey`/`indexByKey` helpers preserve SQL order; a shared
+  `assembleGoalView` keeps batched and per-goal assembly identical (proven deep-equal by a DB-gated test).
+  → §16.
+- **No dedicated achievements-catalog table — RESOLVED (2026-08-19).** `AchievementDefinition` catalog
+  table (mirrored from the `ACHIEVEMENT_CATALOG` code source of truth) + `EarnedAchievement` table now
+  persist per-achievement metadata and a write-once first-observation `earnedAt`; `earned` stays a live
+  derivation and the timestamp is real. → §16.
 - **`ScriptedProvider` / gated tests.** The live AI, DB integration, live-chain, and deployed-vault tests are
   key-/DB-/network-gated and skip cleanly in this sandbox (§8); they are not fakes — the always-on suites
   prove the logic and the gated ones run on a configured host. → §8, §10, §14, §18.
@@ -1119,7 +1264,8 @@ example-botchain`, non-test source) → **no matches**.
   unchanged `test_cancel_toRejectingReceiver_revertsWholeCall` and reentrancy tests still pass (45/45).
 - **Caveat (rule 1):** the **deployed** vault `0x0076c4…f8f8a8` is immutable and predates this fix (see the
   §2 honesty note). The fix lives in source + tests + any future deployment; realizing it on-chain needs a
-  redeploy with the rotated deployer key (a user action).
+  redeploy with the rotated deployer key (a user action) — full runbook in `contracts/DEPLOY.md`, including
+  how to verify the fix (`withdrawEscrow()` present) on the new instance.
 
 ### 22.3 Reward-view mislabelling — two latent correctness bugs — FIXED
 

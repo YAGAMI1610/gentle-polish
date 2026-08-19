@@ -204,7 +204,10 @@ export function readStdin(): string {
  * Refuses to block on an interactive TTY: with no source it raises a clear usage
  * error rather than hanging waiting for input.
  */
-export function contentFromSources(opts: { text?: string | undefined; file?: string | undefined }): string {
+export function contentFromSources(opts: {
+  text?: string | undefined;
+  file?: string | undefined;
+}): string {
   const { text, file } = opts;
   if (text !== undefined && file !== undefined) usage("pass only one of --text or --file");
   if (text !== undefined) return text;

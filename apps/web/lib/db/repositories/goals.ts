@@ -7,6 +7,7 @@ import {
   progressSchema,
   type CreateGoalInput,
 } from "../schemas";
+import { indexByKey } from "./grouping";
 
 /**
  * Wallet-scoped goal access.
@@ -61,6 +62,25 @@ export async function getGoal(walletAddress: string, goalId: string): Promise<Go
 }
 
 /**
+ * Goals for a SET of ids this wallet owns, indexed by id — ONE query, not one per
+ * id (build-prompt §16 / item 6 N+1 fix). Lets the commitment / reward list loaders
+ * resolve every goal title in a single round-trip instead of a `getGoal` per row.
+ * Wallet-scoped; an empty id list short-circuits with no query; an id this wallet
+ * does not own is absent from the map.
+ */
+export async function getGoalsForIds(
+  walletAddress: string,
+  goalIds: readonly string[],
+): Promise<Map<string, Goal>> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  if (goalIds.length === 0) return new Map();
+  const rows = await prisma.goal.findMany({
+    where: { id: { in: [...goalIds] }, walletAddress: addr },
+  });
+  return indexByKey(rows, (g) => g.id);
+}
+
+/**
  * Set progress (0–100) on a goal this wallet owns. Uses `updateMany` with the
  * wallet in the filter so a cross-wallet call updates zero rows rather than
  * silently mutating another wallet's goal. Returns the number of rows changed
@@ -93,6 +113,35 @@ export async function setGoalStatus(
   const result = await prisma.goal.updateMany({
     where: { id: goalId, walletAddress: addr },
     data: { status },
+  });
+  return result.count;
+}
+
+/**
+ * Back-fill the on-chain `goalId` the vault emitted (`GoalRegistered`) onto this
+ * wallet's goal, after the depositor's own wallet broadcast `registerGoal` and the
+ * receipt was indexed (build-prompt §14.8 back-fill seam; LIMITATIONS §17). This is
+ * what lets `prepareCreateCommitment` stop returning `{prepared:false}` for a
+ * freshly-registered goal.
+ *
+ * First-writer-wins and idempotent: the `onchainGoalId: null` guard means a re-record
+ * or a replayed event never clobbers an id already set (the on-chain id is write-once
+ * per goal), and — since `walletAddress` stays in the filter — a cross-wallet call
+ * touches zero rows. Returns rows changed (1 on the first back-fill; 0 if already set /
+ * not owned / not found).
+ */
+export async function setOnchainGoalId(
+  walletAddress: string,
+  goalId: string,
+  onchainGoalId: bigint,
+): Promise<number> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  if (onchainGoalId < 0n) {
+    throw new Error("onchainGoalId must be a non-negative uint256");
+  }
+  const result = await prisma.goal.updateMany({
+    where: { id: goalId, walletAddress: addr, onchainGoalId: null },
+    data: { onchainGoalId },
   });
   return result.count;
 }

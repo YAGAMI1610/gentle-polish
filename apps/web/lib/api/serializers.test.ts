@@ -354,6 +354,21 @@ describe("toCommitmentView", () => {
     const view = toCommitmentView(commitmentRow({ txHash: "0xreal" }), "Read 12 books");
     expect(view.txHash).toBe("0xreal");
   });
+
+  it("defaults locked to false and never infers it from status", () => {
+    // ACTIVE would read as "locked" if we (wrongly) derived it from status; the
+    // locked flag is chain-sourced, so with no chain context it stays false.
+    const view = toCommitmentView(commitmentRow({ status: CommitmentStatus.ACTIVE }), "g");
+    expect(view.locked).toBe(false);
+  });
+
+  it("reflects the caller-supplied locked flag (from an indexed LOCK_FUNDS tx)", () => {
+    // A CREATED row that has really been locked: status stays CREATED (→ "active"),
+    // yet locked is true — exactly the case the Lock-button gate must get right.
+    const view = toCommitmentView(commitmentRow({ status: CommitmentStatus.CREATED }), "g", true);
+    expect(view.status).toBe("active");
+    expect(view.locked).toBe(true);
+  });
 });
 
 describe("toRewardView", () => {
@@ -533,6 +548,54 @@ describe("deriveAchievements", () => {
     });
     expect(list.find((a) => a.id === "ten-verified-milestones")?.earned).toBe(false);
     expect(list.find((a) => a.id === "season-of-consistency")?.earned).toBe(false);
+  });
+
+  it("attaches a persisted earnedAt only to achievements that are actually earned", () => {
+    const earnedAt = new Map<string, Date>([
+      ["first-check-in", new Date("2026-08-10T00:00:00.000Z")],
+      // A stored crossing for an achievement that is NOT currently earned: must be ignored.
+      ["skin-in-the-game", new Date("2026-08-11T00:00:00.000Z")],
+    ]);
+    const list = deriveAchievements(
+      {
+        checkIns: 1, // first-check-in earned
+        verifiedMilestones: 0,
+        onChainCommitments: 0, // skin-in-the-game NOT earned
+        goalsCompleted: 0,
+        streakWeeks: 0,
+      },
+      earnedAt,
+    );
+
+    const firstCheckIn = list.find((a) => a.id === "first-check-in");
+    expect(firstCheckIn?.earned).toBe(true);
+    expect(firstCheckIn?.earnedAt).toBe("2026-08-10T00:00:00.000Z");
+
+    // Earned achievement with no stored crossing yet: earned true, but no fabricated time.
+    const finished = list.find((a) => a.id === "finished-what-you-started");
+    expect(finished?.earned).toBe(false);
+    expect("earnedAt" in (finished ?? {})).toBe(false);
+
+    // Unearned achievement never gets a timestamp, even if one is present in the map.
+    const skin = list.find((a) => a.id === "skin-in-the-game");
+    expect(skin?.earned).toBe(false);
+    expect("earnedAt" in (skin ?? {})).toBe(false);
+  });
+
+  it("omits earnedAt for an earned achievement whose crossing is not yet persisted", () => {
+    const list = deriveAchievements(
+      {
+        checkIns: 1,
+        verifiedMilestones: 0,
+        onChainCommitments: 0,
+        goalsCompleted: 0,
+        streakWeeks: 0,
+      },
+      new Map(), // nothing persisted
+    );
+    const firstCheckIn = list.find((a) => a.id === "first-check-in");
+    expect(firstCheckIn?.earned).toBe(true);
+    expect("earnedAt" in (firstCheckIn ?? {})).toBe(false);
   });
 });
 

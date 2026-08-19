@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../client";
 import { WalletScopeError } from "../errors";
 import { createMilestonesInput, evmAddressSchema, type CreateMilestonesInput } from "../schemas";
+import { groupByKey } from "./grouping";
 
 /**
  * Wallet-scoped milestone access.
@@ -56,6 +57,27 @@ export async function listMilestones(walletAddress: string, goalId: string): Pro
     where: { goalId, goal: { walletAddress: addr } },
     orderBy: [{ orderIndex: "asc" }, { createdAt: "asc" }],
   });
+}
+
+/**
+ * Milestones for a SET of goals this wallet owns, grouped by goalId — ONE query,
+ * not one per goal (build-prompt §16 / item 6 N+1 fix). Each goal's list keeps the
+ * exact display order `listMilestones` gives (the shared sort is stable within
+ * each group). Wallet-scoped through the goal relation, so a goalId this wallet
+ * does not own simply contributes no rows. An empty id list short-circuits with no
+ * query. A goal with no milestones is absent from the map (caller defaults to `[]`).
+ */
+export async function listMilestonesForGoals(
+  walletAddress: string,
+  goalIds: readonly string[],
+): Promise<Map<string, Milestone[]>> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  if (goalIds.length === 0) return new Map();
+  const rows = await prisma.milestone.findMany({
+    where: { goalId: { in: [...goalIds] }, goal: { walletAddress: addr } },
+    orderBy: [{ orderIndex: "asc" }, { createdAt: "asc" }],
+  });
+  return groupByKey(rows, (m) => m.goalId);
 }
 
 /**

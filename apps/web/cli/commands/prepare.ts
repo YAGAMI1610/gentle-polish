@@ -26,7 +26,14 @@ import {
   EXIT_OK,
   type GlobalOptions,
 } from "../runtime";
-import { parse, parseId, parseAmountWei, parseDeadline, parsePercent, requireHash64 } from "../format";
+import {
+  parse,
+  parseId,
+  parseAmountWei,
+  parseDeadline,
+  parsePercent,
+  requireHash64,
+} from "../format";
 import { formatEther } from "viem";
 
 export const HELP = `
@@ -91,7 +98,10 @@ export async function run(
       break;
     }
     case "lock-funds": {
-      const { values } = parse(args, { commitment: { type: "string" }, principal: { type: "string" } });
+      const { values } = parse(args, {
+        commitment: { type: "string" },
+        principal: { type: "string" },
+      });
       tx = prepareLockFunds(
         parseId("commitment", requireOpt(values, "commitment")),
         parseAmountWei("principal", requireOpt(values, "principal")),
@@ -100,7 +110,10 @@ export async function run(
       break;
     }
     case "fund-reward": {
-      const { values } = parse(args, { commitment: { type: "string" }, reward: { type: "string" } });
+      const { values } = parse(args, {
+        commitment: { type: "string" },
+        reward: { type: "string" },
+      });
       tx = prepareFundReward(
         parseId("commitment", requireOpt(values, "commitment")),
         parseAmountWei("reward", requireOpt(values, "reward")),
@@ -128,7 +141,10 @@ export async function run(
   }
 
   emit(txToJson(tx), global, () => renderTx(command, tx));
-  note("↳ unsigned tx — sign it with the depositor's own wallet; the backend never broadcasts it.", global);
+  note(
+    "↳ unsigned tx — sign it with the depositor's own wallet; the backend never broadcasts it.",
+    global,
+  );
   return EXIT_OK;
 }
 

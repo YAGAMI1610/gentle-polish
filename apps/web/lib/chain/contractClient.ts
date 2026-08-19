@@ -4,9 +4,11 @@ import {
   encodeFunctionData,
   http,
   keccak256,
+  parseEventLogs,
   toHex,
   type Address,
   type Hex,
+  type Log,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { commitmentVaultAbi } from "./abi";
@@ -160,6 +162,80 @@ export async function readCancellationOpensAt(
     functionName: "cancellationOpensAt",
     args: [commitmentId],
   });
+}
+
+/**
+ * Fetch a mined transaction's receipt (build-prompt §14.8 back-fill seam). Used by the
+ * on-chain-id back-fill to recover the emitted `goalId` / `commitmentId` from the receipt
+ * logs after the DEPOSITOR's own wallet broadcasts `registerGoal` / `createCommitment`.
+ * A pure read — moves nothing, needs no key. Throws viem's own error if the hash is
+ * unknown / not yet mined (the caller decides whether that is fatal or just "try later").
+ */
+export async function readTransactionReceipt(txHash: Hex, config: ChainConfig = readChainConfig()) {
+  return getPublicClient(config).getTransactionReceipt({ hash: txHash });
+}
+
+// ---------------------------------------------------------------------------
+// Event-log parsers — pure, no network. Recover the id the contract emitted so
+// `prepare*` can stop returning {prepared:false} once a goal/commitment is on-chain.
+// ---------------------------------------------------------------------------
+
+export interface GoalRegisteredInfo {
+  readonly goalId: bigint;
+  readonly owner: Address;
+}
+
+export interface CommitmentCreatedInfo {
+  readonly commitmentId: bigint;
+  readonly goalId: bigint;
+  readonly depositor: Address;
+}
+
+/**
+ * Decode the `GoalRegistered(goalId, owner, goalHash)` event OUR vault emitted from a
+ * receipt's logs, returning the on-chain `goalId` and `owner`. Only a log emitted by
+ * `config.vaultAddress` counts — a same-signature event from any other contract in the
+ * same transaction is ignored, so a spoofed log can never inject a foreign id. Returns
+ * null when no such log is present (honest: nothing to back-fill).
+ */
+export function parseGoalRegistered(
+  logs: readonly Log[],
+  config: ChainConfig = readChainConfig(),
+): GoalRegisteredInfo | null {
+  const vault = requireVault(config);
+  const decoded = parseEventLogs({
+    abi: commitmentVaultAbi,
+    eventName: "GoalRegistered",
+    logs: logs as Log[],
+  });
+  const fromVault = decoded.find((l) => l.address.toLowerCase() === vault.toLowerCase());
+  if (!fromVault) return null;
+  return { goalId: fromVault.args.goalId, owner: fromVault.args.owner };
+}
+
+/**
+ * Decode the `CommitmentCreated(commitmentId, goalId, depositor, …)` event OUR vault
+ * emitted from a receipt's logs, returning the on-chain `commitmentId`, its `goalId`,
+ * and the `depositor`. Same vault-address filter as `parseGoalRegistered`. Returns null
+ * when no such log is present.
+ */
+export function parseCommitmentCreated(
+  logs: readonly Log[],
+  config: ChainConfig = readChainConfig(),
+): CommitmentCreatedInfo | null {
+  const vault = requireVault(config);
+  const decoded = parseEventLogs({
+    abi: commitmentVaultAbi,
+    eventName: "CommitmentCreated",
+    logs: logs as Log[],
+  });
+  const fromVault = decoded.find((l) => l.address.toLowerCase() === vault.toLowerCase());
+  if (!fromVault) return null;
+  return {
+    commitmentId: fromVault.args.commitmentId,
+    goalId: fromVault.args.goalId,
+    depositor: fromVault.args.depositor,
+  };
 }
 
 // ---------------------------------------------------------------------------

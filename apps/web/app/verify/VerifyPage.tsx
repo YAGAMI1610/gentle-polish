@@ -1,7 +1,7 @@
 "use client";
 
 import { CheckCircle2, FileText, Github, Loader2, ShieldCheck, Upload, Watch } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { AppShell } from "@/components/commitai/AppShell";
 import { PageHeader } from "@/components/commitai/PageHeader";
@@ -20,7 +20,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/lib/api/client";
 import type { EvidenceResult } from "@/lib/api/dto";
 import type { UploadEvidenceInput } from "@/hooks/useCommitAI";
-import { useGoals, useUploadEvidence } from "@/hooks/useCommitAI";
+import {
+  useConnectors,
+  useDisconnectGithub,
+  useGoals,
+  useImportGithub,
+  useUploadEvidence,
+} from "@/hooks/useCommitAI";
 import { useSession } from "@/hooks/useSession";
 
 const evText = "/assets/ev-text.png";
@@ -52,8 +58,10 @@ const OPTIONS = [
 function uploadErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401) return "Connect your wallet to submit evidence.";
+    if (err.status === 409) return "Connect GitHub first, then import your activity.";
     if (err.status === 413) return "That file is too large — evidence is capped at 15MB.";
     if (err.status === 415) return "That file type isn't allowed as evidence.";
+    if (err.status === 503) return "That connector isn't configured on this deployment.";
     if (err.status === 400) return err.message || "Add some evidence content first.";
   }
   return err instanceof Error ? err.message : "Upload failed.";
@@ -63,13 +71,36 @@ export default function VerifyPage() {
   const { isConnected } = useSession();
   const { data: goals = [] } = useGoals();
   const upload = useUploadEvidence();
+  const connectors = useConnectors();
+  const importGithub = useImportGithub();
+  const disconnectGithub = useDisconnectGithub();
 
   const [goalId, setGoalId] = useState("");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [oauthFlash, setOauthFlash] = useState<string | null>(null);
 
-  const result: EvidenceResult | undefined = upload.data;
+  // Read the one-time ?connect=github&status=… flag the OAuth callback redirects
+  // back with, then clean it off the URL. A full-page redirect remounts the app,
+  // so the connectors query refetches fresh status on its own.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("connect") === "github") {
+      setOauthFlash(params.get("status"));
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, []);
+
+  const result: EvidenceResult | undefined = upload.data ?? importGithub.data;
   const canSubmit = isConnected && Boolean(goalId);
+
+  const githubConfigured = connectors.data?.configured.github ?? false;
+  const githubConn = connectors.data?.connections.find((c) => c.provider === "GITHUB") ?? null;
+
+  function importFromGithub() {
+    if (!goalId) return;
+    importGithub.mutate({ goalId });
+  }
 
   function submitText() {
     if (!goalId || text.trim().length === 0) return;
@@ -210,8 +241,75 @@ export default function VerifyPage() {
         </TabsContent>
 
         <TabsContent value="connect" className="mt-5 space-y-3">
+          {oauthFlash && (
+            <p
+              className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${
+                oauthFlash === "connected"
+                  ? "border-verify/40 bg-verify-soft"
+                  : "border-caution/40 bg-caution-soft"
+              }`}
+            >
+              {oauthFlash === "connected"
+                ? "GitHub connected — pick a goal and import your latest activity below."
+                : oauthFlash === "denied"
+                  ? "GitHub connection was cancelled."
+                  : oauthFlash === "mismatch"
+                    ? "Couldn't verify that sign-in attempt safely — please try connecting again."
+                    : "GitHub connection didn't complete — please try again."}
+            </p>
+          )}
+
+          {/* GitHub — a REAL OAuth connector (item 8). Live when configured, honest
+              and disabled when not; other connectors remain genuinely planned. */}
+          <Card>
+            <CardContent className="flex items-center justify-between gap-4 py-4">
+              <div className="flex items-center gap-3">
+                <Github className="size-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium">GitHub</p>
+                  <p className="text-xs text-muted-foreground">
+                    {githubConn
+                      ? `Connected as @${githubConn.externalLogin}`
+                      : "Commit and PR activity for shipping goals"}
+                  </p>
+                </div>
+              </div>
+              {githubConn ? (
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={importFromGithub}
+                    disabled={!canSubmit || importGithub.isPending}
+                    className="gap-2"
+                  >
+                    {importGithub.isPending && <Loader2 className="size-4 animate-spin" />}
+                    Import latest activity
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => disconnectGithub.mutate()}
+                    disabled={disconnectGithub.isPending}
+                  >
+                    Disconnect
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!isConnected || !githubConfigured}
+                  onClick={() => {
+                    window.location.href = "/api/connectors/github/start";
+                  }}
+                >
+                  Connect
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+
           {[
-            { name: "GitHub", detail: "Commit and PR activity for shipping goals", icon: Github },
             { name: "Fitness tracker", detail: "Runs, workouts and distance", icon: Watch },
             { name: "Reading app", detail: "Finished books and progress", icon: FileText },
           ].map(({ name, detail, icon: Icon }) => (
@@ -230,18 +328,18 @@ export default function VerifyPage() {
               </CardContent>
             </Card>
           ))}
+
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Automatic data connections aren&apos;t available yet — for now, submit a written note or
-            upload a file, both of which are stored and analysed for real. This is a known
-            limitation (see LIMITATIONS.md); the connectors are shown so you can see what&apos;s
-            planned.
+            {githubConfigured
+              ? "GitHub is live: connect it to import your recent commit and PR activity as evidence — it's summarised, hashed and stored for real, exactly like an uploaded file. Fitness and reading connectors are still planned (see LIMITATIONS.md)."
+              : "Automatic GitHub import isn't enabled on this deployment (no OAuth app configured). You can still submit a written note or upload a file — both are stored and analysed for real. Fitness and reading connectors are still planned (see LIMITATIONS.md)."}
           </p>
         </TabsContent>
       </Tabs>
 
-      {upload.isError && (
+      {(upload.isError || importGithub.isError) && (
         <p className="mt-4 rounded-lg border border-caution/40 bg-caution-soft px-3 py-2 text-xs leading-relaxed">
-          {uploadErrorMessage(upload.error)}
+          {uploadErrorMessage(upload.error ?? importGithub.error)}
         </p>
       )}
       {result && (
