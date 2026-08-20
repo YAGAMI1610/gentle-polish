@@ -117,6 +117,48 @@ export interface ChainRecordResult {
   backfillReason: string | null;
 }
 
+/**
+ * POST /api/chain/reconcile response — the honest report of a historical replay
+ * (LIMITATIONS.md item 12). Block numbers and on-chain ids are base-10 strings because a
+ * uint256 does not fit a JS number.
+ *
+ * Every count is what actually happened, not an intention: `recorded` rows did not exist
+ * before, `blockNumbersFilled` rows existed but were missing their block number,
+ * `alreadyIndexed` rows were left untouched, and `skipped` entries carry the real reason
+ * they could not be written. `unmapped` lists real vault events that map to no transaction
+ * kind (admin rotations, escrow bookkeeping) so nothing is silently dropped, and `reason`
+ * is non-null whenever no scan happened at all (chain not configured, empty range).
+ */
+export interface ChainReconcileResult {
+  configured: boolean;
+  fromBlock: string | null;
+  toBlock: string | null;
+  chunks: number;
+  eventsSeen: number;
+  eventsForWallet: number;
+  recorded: number;
+  blockNumbersFilled: number;
+  alreadyIndexed: number;
+  skipped: number;
+  transactions: {
+    txHash: string;
+    kind: string;
+    eventName: string;
+    blockNumber: string;
+    outcome: string;
+    goalId: string | null;
+    commitmentId: string | null;
+    reason: string | null;
+  }[];
+  unmapped: {
+    eventName: string;
+    txHash: string;
+    blockNumber: string;
+    detail: string;
+  }[];
+  reason: string | null;
+}
+
 /** POST /api/evidence response — the stored evidence pointer (no raw bytes). */
 export interface EvidenceResult {
   id: string;

@@ -13,7 +13,8 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { commitmentVaultAbi } from "./abi";
 import { buildBotchainTestnet } from "./botchain";
-import { readAttestorKey, readChainConfig, type ChainConfig } from "./config";
+import { readAttestorKey, readChainConfig, requireVaultAddress, type ChainConfig } from "./config";
+import type { VerificationReceipt } from "./receipt";
 
 /**
  * `CommitmentVault` client (build sequence §14.8) — the ONLY place backend code talks
@@ -26,6 +27,10 @@ import { readAttestorKey, readChainConfig, type ChainConfig } from "./config";
  *    approveCompletion, setAttestor — none of which transfer value. There is no
  *    `lockFunds`/`claimReward`/`releasePrincipal`/`fundReward`/`createCommitment`/
  *    `cancelCommitment` method on it, so the backend key literally cannot call them.
+ *  - `approveCompletion` cannot even be made unilaterally: the contract requires an
+ *    EIP-712 receipt signed by the distinct `aiVerifier` key (invariant I7), which lives
+ *    behind `./receipt.ts` and is never given a wallet client. Two keys, neither of which
+ *    can move money.
  *  - Every value-moving action is a pure `prepare*` encoder returning calldata for the
  *    DEPOSITOR's own wallet to sign (step 9). The backend never broadcasts these and
  *    never holds a key that could.
@@ -44,13 +49,7 @@ function chainFor(config: ChainConfig) {
 }
 
 function requireVault(config: ChainConfig): Address {
-  if (!config.vaultAddress) {
-    throw new Error(
-      "chain not configured: COMMITMENT_VAULT_ADDRESS is unset (no deployed contract). " +
-        "Deploy the vault and set the address — see README.md / LIMITATIONS.md step 8.",
-    );
-  }
-  return config.vaultAddress;
+  return requireVaultAddress(config);
 }
 
 /**
@@ -239,6 +238,44 @@ export function parseCommitmentCreated(
 }
 
 // ---------------------------------------------------------------------------
+// Historical log reads — the network half of the chain-sync reconciler (item 12).
+// Still pure reads: no key, no funds, nothing broadcast.
+// ---------------------------------------------------------------------------
+
+/** The chain's current head. Bounds a historical replay's block range. */
+export async function readLatestBlockNumber(
+  config: ChainConfig = readChainConfig(),
+): Promise<bigint> {
+  return getPublicClient(config).getBlockNumber();
+}
+
+export interface VaultLogRange {
+  readonly fromBlock: bigint;
+  readonly toBlock: bigint;
+}
+
+/**
+ * Fetch every log OUR vault emitted in an inclusive block range (`eth_getLogs`, filtered
+ * by address at the node so an unrelated contract's logs never even arrive). Decoding and
+ * the second, defensive address check live in `./events.ts`.
+ *
+ * Public RPCs cap the span of a single query, so callers chunk the range with
+ * `blockRangeChunks`; a range this wide is the caller's problem to split, not something to
+ * silently truncate here. Throws viem's own error if the RPC rejects or is unreachable —
+ * the reconciler surfaces that rather than reporting a successful empty scan.
+ */
+export async function readVaultLogs(
+  range: VaultLogRange,
+  config: ChainConfig = readChainConfig(),
+): Promise<Log[]> {
+  return getPublicClient(config).getLogs({
+    address: requireVault(config),
+    fromBlock: range.fromBlock,
+    toBlock: range.toBlock,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Attestor client — the ONLY writes the backend can make. None move funds.
 // ---------------------------------------------------------------------------
 
@@ -254,10 +291,15 @@ export interface RequestCompletionArgs {
   readonly verificationHash: Hex;
 }
 
+/**
+ * Approval is two-of-two (contract invariant I7): this client's key sends the
+ * transaction, and the receipt must already be signed by the distinct `aiVerifier`
+ * (see `./receipt.ts`). Holding the attestor key alone approves nothing.
+ */
 export interface ApproveCompletionArgs {
-  readonly commitmentId: bigint;
-  readonly verificationHash: Hex;
-  readonly confidence: number;
+  readonly receipt: VerificationReceipt;
+  /** The `aiVerifier`'s EIP-712 signature over exactly that receipt. */
+  readonly signature: Hex;
 }
 
 /**
@@ -307,12 +349,12 @@ export function getAttestorClient(
         functionName: "requestCompletion",
         args: [commitmentId, verificationHash],
       }),
-    approveCompletion: ({ commitmentId, verificationHash, confidence }) =>
+    approveCompletion: ({ receipt, signature }) =>
       wallet.writeContract({
         address: vault,
         abi: commitmentVaultAbi,
         functionName: "approveCompletion",
-        args: [commitmentId, verificationHash, confidence],
+        args: [receipt, signature],
       }),
     setAttestor: (newAttestor) =>
       wallet.writeContract({

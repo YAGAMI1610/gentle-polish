@@ -31,6 +31,12 @@ import type { EvidenceResult } from "@/lib/api/dto";
  * WHILE streaming — not from the (absent-on-chunked / spoofable) Content-Length
  * header — so an unlabelled or oversized upload cannot force an unbounded buffer;
  * `storeEvidence` still enforces the precise per-file limit internally.
+ *
+ * Content hardening (§13, item 10) then runs inside `storeEvidence`, so it cannot be
+ * bypassed by any other write path: the real bytes are sniffed and held to the
+ * declared type (spoofed/executable/archive/active content → 415), malware-scanned
+ * when a scanner is configured (signature → 422, no verdict → 503 fail-closed), and
+ * image metadata/EXIF is stripped before the bytes are hashed and stored.
  */
 export const dynamic = "force-dynamic";
 

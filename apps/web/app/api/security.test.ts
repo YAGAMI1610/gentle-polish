@@ -57,6 +57,7 @@ import { GET as getCommitmentById } from "./commitments/[id]/route";
 import { GET as getEvidenceById } from "./evidence/[id]/route";
 import { POST as postCheckins } from "./checkins/route";
 import { POST as postChainRecord } from "./chain/record/route";
+import { POST as postChainReconcile } from "./chain/reconcile/route";
 import { POST as postAiTurn } from "./ai/turn/route";
 import { POST as postEvidence } from "./evidence/route";
 import { POST as postPrepareLock } from "./commitments/[id]/prepare-lock/route";
@@ -71,6 +72,7 @@ import {
   prepareLockFunds,
 } from "@/lib/chain/contractClient";
 import { readChainConfig } from "@/lib/chain/config";
+import { getReceiptSigner } from "@/lib/chain/receipt";
 import {
   EVIDENCE_CLOSE,
   EVIDENCE_OPEN,
@@ -156,6 +158,10 @@ describe("§13.1 unauthorized access is refused with 401 (always-on)", () => {
       invoke: () => postChainRecord(makeReq("POST", "/api/chain/record", { origin: BASE })),
     },
     {
+      name: "POST /api/chain/reconcile",
+      invoke: () => postChainReconcile(makeReq("POST", "/api/chain/reconcile", { origin: BASE })),
+    },
+    {
       name: "POST /api/ai/turn",
       invoke: () => postAiTurn(makeReq("POST", "/api/ai/turn", { origin: BASE })),
     },
@@ -215,6 +221,10 @@ describe("§13 state-changing requests enforce same-origin (403, always-on)", ()
     {
       name: "POST /api/chain/record",
       invoke: () => postChainRecord(makeReq("POST", "/api/chain/record", { origin: CROSS })),
+    },
+    {
+      name: "POST /api/chain/reconcile",
+      invoke: () => postChainReconcile(makeReq("POST", "/api/chain/reconcile", { origin: CROSS })),
     },
     {
       name: "POST /api/ai/turn",
@@ -317,7 +327,10 @@ describe("§13.5 SIWE verify rejects replay/forgery with 401 (always-on)", () =>
 // ---------------------------------------------------------------------------
 // §13.6 — Malicious evidence upload is refused at the HTTP boundary, BEFORE
 // storeEvidence: oversize → 413, disallowed MIME → 415, non-multipart → 415.
-// A valid session is presented so the request reaches the upload gate.
+// Plus content hardening (§13, item 10): the bytes themselves are sniffed, so a
+// payload that lies about its type is refused with 415 too — before any blob is
+// written and before any DB row exists. A valid session is presented so the
+// request reaches the upload gate.
 // ---------------------------------------------------------------------------
 describe("§13.6 malicious upload is refused at the boundary (always-on)", () => {
   it("a non-multipart body is refused with 415", async () => {
@@ -392,6 +405,47 @@ describe("§13.6 malicious upload is refused at the boundary (always-on)", () =>
     expect(res.status).toBe(413);
   });
 
+  it("a scriptable MIME type (text/html, image/svg+xml) is refused with 415", async () => {
+    // Both match an allowed prefix (`text/`, `image/`) but are stored-XSS vectors,
+    // so the allowlist denies them outright — the gap recorded in §22.3, now closed.
+    for (const mimeType of ["text/html", "image/svg+xml"]) {
+      await setSession({ address: ADDR_A });
+      const fd = new FormData();
+      fd.set("goalId", "g");
+      fd.set("type", "FILE");
+      fd.set("file", new Blob([new Uint8Array([0x3c, 0x62, 0x3e])], { type: mimeType }), "x.html");
+      const res = await postEvidence(makeReq("POST", "/api/evidence", { origin: BASE, body: fd }));
+      expect(res.status).toBe(415);
+    }
+  });
+
+  it("an executable renamed to proof.png is refused with 415 by content sniffing", async () => {
+    await setSession({ address: ADDR_A });
+    // Declared image/png — it clears the MIME allowlist, so ONLY sniffing the real
+    // bytes can catch it. These are a genuine ELF header.
+    const elf = new Uint8Array(64);
+    elf.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0], 0);
+    const fd = new FormData();
+    fd.set("goalId", "g");
+    fd.set("type", "PHOTO");
+    fd.set("file", new Blob([elf], { type: "image/png" }), "proof.png");
+    const res = await postEvidence(makeReq("POST", "/api/evidence", { origin: BASE, body: fd }));
+    expect(res.status).toBe(415);
+    // Nothing was stored and no row was created: the refusal happens before both.
+    expect(await res.json()).toMatchObject({ error: expect.stringMatching(/executable/i) });
+  });
+
+  it("HTML smuggled in under a text/plain label is refused with 415", async () => {
+    await setSession({ address: ADDR_A });
+    const html = new TextEncoder().encode("<!doctype html><script>fetch('/api/goals')</script>");
+    const fd = new FormData();
+    fd.set("goalId", "g");
+    fd.set("type", "FILE");
+    fd.set("file", new Blob([html], { type: "text/plain" }), "notes.txt");
+    const res = await postEvidence(makeReq("POST", "/api/evidence", { origin: BASE, body: fd }));
+    expect(res.status).toBe(415);
+  });
+
   it("the storage key guard rejects a path-traversal key (re-assert; full proof in localDiskStorage.test.ts)", async () => {
     const storage = new LocalDiskEvidenceStorage("/tmp/commitai-security-noop");
     // pathFor() rejects a malformed/hostile key before ever touching the disk, so
@@ -439,6 +493,7 @@ describe("§13.7 evidence text cannot escape the untrusted-data fence (always-on
 describe("§13.3/§13.8 attestor surface is value-neutral and frozen (re-assert)", () => {
   const VAULT = "0x1111111111111111111111111111111111111111";
   const ANVIL_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"; // public anvil #0
+  const ANVIL_VERIFIER_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"; // public anvil #1
   const config = readChainConfig({ COMMITMENT_VAULT_ADDRESS: VAULT });
 
   it("exposes exactly the four value-neutral attestor methods, frozen", () => {
@@ -464,6 +519,23 @@ describe("§13.3/§13.8 attestor surface is value-neutral and frozen (re-assert)
     ]) {
       expect(surface[forbidden]).toBeUndefined();
     }
+  });
+
+  it("cannot approve a completion alone: the AI-verifier key signs, and can only sign", () => {
+    // Two-of-two (contract invariant I7, item 11). The verifier half is a signature
+    // producer with no wallet client and no transport — it cannot broadcast at all, and
+    // the attestor half cannot produce a receipt. Full proof: receipt.safety.test.ts.
+    const signer = getReceiptSigner(config, ANVIL_VERIFIER_KEY) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(signer).sort()).toEqual(["address", "signReceipt"]);
+    expect(Object.isFrozen(signer)).toBe(true);
+    for (const forbidden of ["writeContract", "sendTransaction", "request", "account"]) {
+      expect(signer[forbidden], forbidden).toBeUndefined();
+    }
+    const attestor = getAttestorClient(config, ANVIL_KEY) as unknown as Record<string, unknown>;
+    expect(attestor["signReceipt"]).toBeUndefined();
   });
 });
 

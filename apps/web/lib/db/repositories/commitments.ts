@@ -123,6 +123,25 @@ export async function createDraftCommitment(
 }
 
 /**
+ * Find this wallet's commitment by the on-chain `commitmentId` the vault assigned, or
+ * null. The inverse of `setOnchainCommitmentId`, and the link the chain-sync reconciler
+ * needs (LIMITATIONS.md item 12): a replayed `FundsLocked` / `CompletionApproved` / … log
+ * carries only the on-chain id, so this is how a past event is attached to the right DB
+ * row (and, via the row's `goalId`, to the right goal). Wallet-scoped, so a replayed
+ * event can never attach to a stranger's commitment; null when the id has not been
+ * back-filled onto any of this wallet's commitments yet, which the caller must report
+ * honestly rather than guessing at a row.
+ */
+export async function getCommitmentByOnchainId(
+  walletAddress: string,
+  onchainCommitmentId: bigint,
+): Promise<Commitment | null> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  if (onchainCommitmentId < 0n) return null;
+  return prisma.commitment.findFirst({ where: { walletAddress: addr, onchainCommitmentId } });
+}
+
+/**
  * Back-fill the on-chain `commitmentId` the vault emitted (`CommitmentCreated`) onto
  * this wallet's DRAFT commitment, after the depositor's own wallet broadcast
  * `createCommitment` and the receipt was indexed (build-prompt §14.8 back-fill seam;

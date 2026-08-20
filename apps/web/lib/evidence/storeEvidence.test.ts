@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,17 @@ import { EvidenceType, GoalMode } from "@prisma/client";
 import { createGoal, ensureWallet, prisma, WalletScopeError } from "@/lib/db";
 import { probeDatabaseReady } from "@/lib/db/probe";
 import { LocalDiskEvidenceStorage, type EvidenceStorage } from "@/lib/storage";
+import {
+  EvidenceContentRejectedError,
+  EvidenceMalwareDetectedError,
+  EvidenceScanUnavailableError,
+} from "./errors";
+import type {
+  EvidenceHardeningReport,
+  MalwareScanTarget,
+  MalwareScanVerdict,
+  MalwareScanner,
+} from "./hardening";
 import { MAX_EVIDENCE_BYTES, readEvidenceBlob, storeEvidence } from "./storeEvidence";
 
 /**
@@ -16,9 +28,14 @@ import { MAX_EVIDENCE_BYTES, readEvidenceBlob, storeEvidence } from "./storeEvid
  *  - Always-on payload guards: exactly-one-payload, size cap, MIME allowlist. These
  *    reject BEFORE any storage or DB call, so a throwing storage doubles as a proof
  *    that nothing is written on the rejection paths.
+ *  - Always-on content hardening (§13, item 10): the sniff/scan/scrub boundary runs
+ *    inside storeEvidence, so spoofed, executable, archived and active content is
+ *    refused on EVERY write path (upload route and connector import alike) and the
+ *    throwing storage proves nothing is written when it is.
  *  - DB-gated integration: real Prisma + a real temp-dir disk store, exercising the
- *    binary/text split, the anchorable-hash invariant, and — the point of §9 —
- *    wallet-scoped privacy: one wallet can neither read nor attach another's evidence.
+ *    binary/text split, the anchorable-hash invariant, the fact that the stored bytes
+ *    are the SCRUBBED ones, and — the point of §9 — wallet-scoped privacy: one wallet
+ *    can neither read nor attach another's evidence.
  */
 
 /** Storage that fails loudly if touched — the guard paths must never reach it. */
@@ -80,6 +97,94 @@ describe("storeEvidence — payload guards (no storage, no DB)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Always-on content hardening (§13, item 10)
+// ---------------------------------------------------------------------------
+
+const WALLET = "0x1111111111111111111111111111111111111111";
+const asset = (name: string): Uint8Array =>
+  new Uint8Array(readFileSync(join(process.cwd(), "public", "assets", name)));
+const latin1 = (text: string): Uint8Array => new Uint8Array(Buffer.from(text, "latin1"));
+
+/** A scanner with a scripted verdict, used to prove the hook is wired end to end. */
+class ScriptedScanner implements MalwareScanner {
+  readonly name = "scripted";
+  calls = 0;
+  constructor(private readonly outcome: MalwareScanVerdict | Error) {}
+  async scan(_target: MalwareScanTarget): Promise<MalwareScanVerdict> {
+    this.calls += 1;
+    if (this.outcome instanceof Error) throw this.outcome;
+    return this.outcome;
+  }
+}
+
+describe("storeEvidence — content hardening (no storage, no DB)", () => {
+  const base = { goalId: "goal_harden", type: EvidenceType.PHOTO } as const;
+  const attempt = (
+    args: Partial<Parameters<typeof storeEvidence>[1]>,
+    options: Parameters<typeof storeEvidence>[3] = { scanner: null },
+  ) => storeEvidence(WALLET, { ...base, ...args }, throwingStorage, options);
+
+  it("refuses scriptable MIME types the old allowlist admitted (§22.3)", async () => {
+    for (const mimeType of ["text/html", "image/svg+xml", "application/xml"]) {
+      await expect(attempt({ bytes: latin1("<b>hi</b>"), mimeType })).rejects.toThrow(
+        /MIME type not allowed/,
+      );
+    }
+  });
+
+  it("refuses HTML bytes smuggled in under a text/plain label", async () => {
+    await expect(
+      attempt({
+        bytes: latin1("<!doctype html><script>fetch('/api/goals')</script>"),
+        mimeType: "text/plain",
+        fileName: "notes.txt",
+      }),
+    ).rejects.toBeInstanceOf(EvidenceContentRejectedError);
+  });
+
+  it("refuses an executable renamed to proof.png", async () => {
+    const elf = new Uint8Array(64);
+    elf.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0], 0);
+    await expect(
+      attempt({ bytes: elf, mimeType: "image/png", fileName: "proof.png" }),
+    ).rejects.toThrow(/executable/i);
+  });
+
+  it("refuses an archive, whose contents cannot be sniffed", async () => {
+    await expect(
+      attempt({ bytes: latin1("PK\x03\x04binary"), mimeType: "application/octet-stream" }),
+    ).rejects.toThrow(/archive/i);
+  });
+
+  it("refuses a real image whose declared type does not match its bytes", async () => {
+    await expect(
+      attempt({ bytes: asset("agent-mark.png"), mimeType: "application/pdf" }),
+    ).rejects.toThrow(/but its content is image\/png/);
+  });
+
+  it("refuses an upload when the malware scanner matches a signature", async () => {
+    const scanner = new ScriptedScanner({
+      clean: false,
+      scanner: "scripted",
+      signature: "Unix.Trojan.Test-1",
+    });
+    await expect(
+      attempt({ bytes: asset("agent-mark.png"), mimeType: "image/png" }, { scanner }),
+    ).rejects.toBeInstanceOf(EvidenceMalwareDetectedError);
+    expect(scanner.calls).toBe(1);
+  });
+
+  it("fails closed when a configured scanner cannot return a verdict", async () => {
+    const scanner = new ScriptedScanner(
+      new EvidenceScanUnavailableError("scripted", "unreachable"),
+    );
+    await expect(
+      attempt({ bytes: asset("agent-mark.png"), mimeType: "image/png" }, { scanner }),
+    ).rejects.toBeInstanceOf(EvidenceScanUnavailableError);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // DB-gated integration
 // ---------------------------------------------------------------------------
 
@@ -121,9 +226,12 @@ describe.skipIf(!dbReady)("storeEvidence pipeline (integration)", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("stores a binary photo off-chain and records only its hash on the row", async () => {
+  it("stores a real photo off-chain, metadata stripped, and records only its hash", async () => {
     const goal = await createGoal(A, goalFor("photo-goal"));
-    const bytes = new TextEncoder().encode("PNGDATA…binary proof");
+    // A real PNG — it carries an iTXt metadata block, so this also proves the
+    // hardening pass runs on the way in rather than only in its own unit tests.
+    const bytes = asset("agent-mark.png");
+    const reports: EvidenceHardeningReport[] = [];
 
     const ev = await storeEvidence(
       A,
@@ -135,11 +243,17 @@ describe.skipIf(!dbReady)("storeEvidence pipeline (integration)", () => {
         fileName: "proof.png",
       },
       storage,
+      { scanner: null, onHardened: (report) => reports.push(report) },
     );
 
-    expect(ev.storageKey).toBe(`wallet/${A}/${sha256Hex(bytes)}`);
-    expect(ev.contentHash).toBe(sha256Hex(bytes));
-    expect(ev.sizeBytes).toBe(bytes.byteLength);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.metadataRemoved).toEqual(["png:iTXt"]);
+    expect(reports[0]?.scanned).toBe(false);
+
+    // The row describes the SCRUBBED bytes, not the upload: smaller, and hashed anew.
+    expect(ev.sizeBytes).toBeLessThan(bytes.byteLength);
+    expect(ev.contentHash).not.toBe(sha256Hex(bytes));
+    expect(ev.storageKey).toBe(`wallet/${A}/${ev.contentHash}`);
     expect(ev.mimeType).toBe("image/png");
     expect(ev.fileName).toBe("proof.png");
     // Raw bytes never land in a text column, and the hash is not the pointer.
@@ -148,9 +262,15 @@ describe.skipIf(!dbReady)("storeEvidence pipeline (integration)", () => {
 
     const blob = await readEvidenceBlob(A, ev.id, storage);
     expect(blob).not.toBeNull();
-    expect(Buffer.from(blob?.bytes ?? new Uint8Array()).toString("utf8")).toBe(
-      "PNGDATA…binary proof",
+    const stored = blob?.bytes ?? new Uint8Array();
+    // What is on disk hashes to the anchorable hash, is still a PNG, and no longer
+    // contains the metadata block the original shipped with.
+    expect(sha256Hex(stored)).toBe(ev.contentHash);
+    expect(Buffer.from(stored.subarray(0, 8))).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     );
+    expect(Buffer.from(stored).includes(Buffer.from("iTXt", "latin1"))).toBe(false);
+    expect(Buffer.from(bytes).includes(Buffer.from("iTXt", "latin1"))).toBe(true);
   });
 
   it("stores a text claim with a content hash but no blob", async () => {
@@ -172,6 +292,7 @@ describe.skipIf(!dbReady)("storeEvidence pipeline (integration)", () => {
 
   it("scopes retrieval and attachment to the owning wallet (§9 privacy)", async () => {
     const goal = await createGoal(A, goalFor("private-goal"));
+    // Plain-text bytes with no declared type: sniffed as text and stored as-is.
     const bytes = new TextEncoder().encode("A's private evidence");
     const ev = await storeEvidence(
       A,

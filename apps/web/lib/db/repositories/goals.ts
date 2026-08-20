@@ -147,6 +147,24 @@ export async function setOnchainGoalId(
 }
 
 /**
+ * Find this wallet's goal by the on-chain `goalId` the vault assigned, or null. The
+ * inverse of `setOnchainGoalId`, and the link the chain-sync reconciler needs
+ * (LIMITATIONS.md item 12): a replayed `GoalRegistered` / `MilestoneRegistered` log
+ * carries only the on-chain id, so this is how a past event is attached to the right
+ * DB row. Wallet-scoped, so a replayed event can never attach to a stranger's goal;
+ * null when the id has not been back-filled onto any of this wallet's goals yet, which
+ * the caller must report honestly rather than guessing at a row.
+ */
+export async function getGoalByOnchainId(
+  walletAddress: string,
+  onchainGoalId: bigint,
+): Promise<Goal | null> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  if (onchainGoalId < 0n) return null;
+  return prisma.goal.findFirst({ where: { walletAddress: addr, onchainGoalId } });
+}
+
+/**
  * Set the next check-in time (and optionally the structured cadence) on a goal
  * this wallet owns. `updateMany` keeps the wallet in the filter so a cross-wallet
  * call touches zero rows. Returns rows changed (0 if not owned / not found).

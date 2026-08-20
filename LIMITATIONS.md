@@ -102,14 +102,17 @@ testnet deployment the `owner`, the `attestor`, and the deployer are the **same*
 (`0xae5c…7607`). It is money-safe: neither `owner` nor `attestor` has any code path to move a
 depositor's funds — the contract makes every transfer depositor-signed and pull-based
 (invariant proved in `contractClient.safety.test.ts` and the Foundry suite). But collapsing
-the three roles removes defence-in-depth. **Code-prep landed (2026-08-19, items 3 & 4):** the
-deploy script now _enforces_ distinct deployer/owner/attestor by default — `Deploy.validateRoles`
-(pure, unit-tested in `contracts/test/Deploy.t.sol`, 6 tests) reverts before any broadcast unless
-`ALLOW_COLLAPSED_ROLES=true` is explicitly set — and `contracts/DEPLOY.md` documents the
-distinct-EOA + Safe-multisig-owner setup (constructor sets the owner directly, so a Safe can own
-from block 0; Ownable2Step for a later hand-off) and the attestor-rotation procedure. What remains
+the three roles removes defence-in-depth. **Code-prep landed (2026-08-19, items 3 & 4; extended
+2026-08-20, item 11):** the deploy script now _enforces_ distinct deployer/owner/attestor/aiVerifier
+by default — `Deploy.validateRoles` (pure, unit-tested in `contracts/test/Deploy.t.sol`, 10 tests)
+reverts before any broadcast unless `ALLOW_COLLAPSED_ROLES=true` is explicitly set, and one check
+(`attestor != aiVerifier`) is a contract invariant that flag cannot waive — and
+`contracts/DEPLOY.md` documents the distinct-EOA + Safe-multisig-owner setup (constructor sets the
+owner directly, so a Safe can own from block 0; Ownable2Step for a later hand-off) and both
+key-rotation procedures (`setAttestor` / `setAiVerifier`). Note the live instance has **no
+`aiVerifier` at all** — it predates item 11, so on it approval is still one-of-one. What remains
 is the user's to do and is deliberately NOT automated: rotate the exposed deployer/attestor key
-(item 1) and **redeploy** with three distinct, rotated accounts (a broadcast needing a funded
+(item 1) and **redeploy** with four distinct, rotated accounts (a broadcast needing a funded
 wallet). The exposed keys and API keys shared during this build session **must be rotated** before
 any non-throwaway use.
 
@@ -382,9 +385,60 @@ is privacy-focused — raw evidence lives off-chain and only hashes are anchored
 
 - the decision log stores only an evidence id / content hash in `evidenceRef`, NEVER raw
   evidence (enforced by `createDecisionInput`);
-- a production deployment should use a paid tier (data excluded from training) or self-hosted
-  inference, and must never send raw evidence bytes to the model. This is recorded now; the
-  evidence-handling tools land in steps 6–7.
+- no raw evidence bytes or `contentText` are ever sent to the model — see the note below, which
+  is now enforced by an always-on test suite rather than only documented.
+
+### 10.1 Free-tier Gemini is a deliberate choice, and here is the mitigation (item 13)
+
+**For judges and reviewers, stated plainly: staying on Gemini's free tier is a deliberate,
+documented tradeoff — not an oversight, and not a gap we forgot to close.** Google's free tier may
+use prompts and responses to improve their products. A hackathon build has no paid billing account,
+and pretending otherwise (or shipping a paid-tier code path nobody can run) would violate
+`CLAUDE.md` rule 1. So instead of changing tiers, the privacy boundary is drawn so that **what the
+free tier could learn contains no user evidence at all**.
+
+**What the model does receive:** the app-authored trust-boundary SYSTEM prompt, the user's own chat
+turns (what they typed into `/create` or `/check-in`), the app-authored `toolPolicy` routing line,
+the advertised tool schemas, and tool _results_ — which are goal/verification metadata: ids,
+enum signal levels, a 0–100 confidence, a `sha256` hash, and the engine's own reasoning string.
+
+**What it never receives:** any uploaded evidence bytes, any stored `Evidence.contentText`, any
+blob `storageKey`, and anything read back out of the evidence store. `analyzeEvidence` is the only
+AI-layer code that touches an `Evidence` row at all, and it reads exactly four fields off it —
+`type`, `id`, `goalId`, `contentHash` — because the verification outcome is computed by the
+deterministic reality-check engine from the evidence **type** and history, never from its text
+(§12). The `evidenceSummary` parameter flows model → app (it is stored for display), and its own
+schema description tells the model to write its own words rather than paste content.
+
+**Why this is verified rather than asserted.** One `evidence.contentText` spliced into a prompt
+would silently break the whole claim, and nothing would fail at runtime — so
+`lib/ai/privacyBoundary.test.ts` (**11 always-on tests**, no key, no network, no DB) makes it fail
+in CI instead, in three independent layers:
+
+1. **Reachability (source guard).** No file under `lib/ai/` may so much as _name_ `contentText`,
+   `storageKey`, `readEvidenceBlob`, `evidenceBytes` or `readBlob`. If raw evidence is not
+   reachable from the AI layer, no prompt can carry it. The scan asserts it found a real,
+   non-empty file set first, so it cannot pass vacuously. (Verified to bite: temporarily adding
+   `evidence.contentText` to `lib/ai/runner.ts` fails this test.)
+2. **Egress (source guard).** Exactly one file in `apps/web` carries a real
+   `from "@google/genai"` specifier — `lib/ai/gemini.ts` — so there is a single place anything can
+   leave for the model, and it is a pure 1:1 mapping of the `AIProvider` request.
+3. **Payload (behavioural).** A recording provider driven through the real `runTurn` captures
+   exactly what crosses the `AIProvider` boundary: the request carries only
+   `{system, messages, tools}` — no field an upload could ride in — the transcript is exactly the
+   user's own chat turns, the system instruction contains no evidence, no advertised tool
+   parameter accepts evidence content, and `analyzeEvidence` takes its evidence by **id**.
+
+The audit-log half is covered in the same suite: `createDecisionInput` accepts an id or a 64-char
+`sha256` and **rejects** anything over 256 chars (an `Evidence.contentText` may be 20,000), and a
+source guard asserts the repo has exactly **one** `evidenceRef:` writer —
+`lib/ai/tools/analyzeEvidence.ts`, passing `evidence.id`.
+
+**What would still change on a paid tier:** nothing about this boundary — it would only remove the
+training-use caveat on the user's own chat text, which is the one thing a chat product cannot avoid
+sending. Self-hosted inference behind the same `AIProvider` interface is the other option and needs
+no change above `gemini.ts`. Both remain the documented production fix; neither is required for the
+evidence-privacy guarantee above, which holds on the free tier today.
 
 **How the tests are gated:**
 
@@ -532,9 +586,49 @@ and cross-wallet attaches throw `WalletScopeError`.
   signature is the real algorithm, not an approximation), `config.test.ts` (7) the honesty contract,
   `s3Storage.test.ts` (7) request shaping + status mapping via an injected transport (the connectors DI
   idiom), and `index.test.ts` (4) that the factory selects each driver by config alone.
-- **Content hardening is deferred.** MIME is checked against an allowlist and total size is capped
-  (`MAX_EVIDENCE_BYTES`), but deep content-sniffing, virus scanning, and EXIF/metadata scrubbing are
-  production follow-ups (step 9 / hardening), noted here rather than silently skipped.
+- **Content hardening ships — RESOLVED (2026-08-19, item 10).** `lib/evidence/hardening/` is a
+  choke point inside `storeEvidence`, entered BEFORE anything is hashed or written, so every write path
+  (the `/api/evidence` upload route and the GitHub connector import alike) gets the same treatment and
+  none can bypass it. Three layers, in this order:
+  1. **Deep content sniffing** (`sniff.ts`) — magic-byte identification for PNG/JPEG/GIF/WebP/BMP/TIFF/
+     ISO-BMFF (AVIF/HEIC)/PDF/ZIP/GZIP/BZ2/XZ/7z/RAR/TAR/ELF/MZ/Mach-O/OLE/shebang plus strict-UTF-8 text
+     detection. The declared MIME must AGREE with the bytes (an ELF called `proof.png` is refused, 415);
+     an unlabelled upload adopts its sniffed type; **executables, archives, and active/scriptable content
+     (HTML/SVG/XML/PHP) are refused outright**, so the allowlist is no longer the only gate. TIFF/HEIC/AVIF
+     are refused too — honestly, because their metadata cannot be stripped here (message asks for JPEG/PNG).
+  2. **Malware scan hook** (`scanner.ts`, `clamd.ts`) — the `MalwareScanner` seam, with a real ClamAV
+     driver speaking clamd's own `zINSTREAM` TCP protocol (no SDK, no shell-out — the same "implement the
+     real protocol" approach as the SigV4 signer). Selected by `EVIDENCE_MALWARE_SCAN`; **OFF by default**,
+     in which case the report says `scanned: false` rather than claiming a scan that never ran (rule 1).
+     Once configured it is **FAIL-CLOSED**: a signature match refuses the upload (422) and an unreachable /
+     timing-out / protocol-erroring daemon also refuses it (503) instead of storing bytes unscanned.
+     The scan runs on the **original** bytes, before scrubbing, so a signature hidden in an EXIF blob gets
+     the upload refused rather than silently sanitised into looking clean.
+  3. **EXIF/metadata scrubbing** (`metadata.ts`) — byte-level container rewrites, always on, no library:
+     JPEG drops every APPn/COM except JFIF/ICC/Adobe (so EXIF **GPS**, XMP, and Photoshop/IPTC go), PNG
+     keeps only a critical/rendering chunk allowlist (tEXt/iTXt/zTXt/eXIf/tIME dropped, CRCs preserved),
+     WebP removes EXIF/XMP chunks **and** clears the matching VP8X feature bits and rewrites the RIFF size,
+     GIF drops comment and metadata application extensions while keeping the NETSCAPE loop block. Data
+     appended after EOI/IEND is dropped, and a malformed container is refused rather than stored.
+
+  The **scrubbed** bytes are what `storeEvidence` hashes and stores, so the anchorable `contentHash`
+  always describes exactly what sits in the blob store. Errors map through `toHttpError`
+  (415 / 422 / 503). Tests — 75 new, all always-on, no mocked scanners and no fabricated images:
+  `sniff.test.ts` (17) uses the repo's real PNG/JPEG assets and spec magic bytes for every refused class,
+  `metadata.test.ts` (16) scrubs the **real** `hero-topo.jpg` (which really carries an XMP APP1) and
+  `agent-mark.png` (a real iTXt chunk), then re-inserts real EXIF/GPS + comment blocks with real framing
+  and real CRC32s and requires the scrubber to land byte-for-byte on the metadata-free file,
+  `clamd.test.ts` (10) drives the client against a **real loopback TCP server** that decodes `zINSTREAM`
+  and asserts the command, frame lengths and reassembled payload, `scanner.test.ts` (10) the config
+  honesty contract, `harden.test.ts` (12) the ordering guarantee, plus 7 in `storeEvidence.test.ts`
+  (a throwing storage proves nothing is written on any refusal path) and 3 in `app/api/security.test.ts`
+  §13.6 at the HTTP boundary.
+
+  Remaining honest limits: sniffing is header-based, so a **polyglot** file whose header is a valid image
+  is accepted as that image (the scrub then rewrites the container, which breaks most such payloads, and
+  the download route already forces `attachment` + `nosniff`); PDFs are accepted whole — no JavaScript or
+  embedded-file stripping, so PDF sanitising is a real follow-up; and an unlabelled binary that matches no
+  signature is still stored as `application/octet-stream`.
 
 ## 14. Step 8 — contract client (viem), chain-tx indexer, and chain-aware tools
 
@@ -595,10 +689,25 @@ broadcast hash.
   them.
 - **The ABI is hand-transcribed** (no compiled Foundry artifact ships in the web package). To make
   drift from the Solidity source fail locally rather than on-chain, `abi.test.ts` recomputes every
-  checked selector from its canonical signature and round-trips `encode`→`decode`.
-- **No historical event backfill / sync loop yet.** `recordChainTx` indexes a transaction at the
-  moment the backend broadcasts it; reconstructing state by replaying past chain events is future
-  work (it belongs with the step-9 read path), noted here rather than silently omitted.
+  checked selector from its canonical signature and round-trips `encode`→`decode`. **Extended
+  2026-08-20 (item 12) with a real drift guard, and it caught a real gap.** The per-signature cases
+  above only prove each _listed_ entry is right; they cannot notice something _missing_. A new
+  `describe("ABI ↔ CommitmentVault.sol (no missing declaration)")` block parses the sibling
+  `contracts/src/CommitmentVault.sol` and asserts every external/public function, event and error it
+  declares appears in this transcription. That test failed on first run: the §22.2 refund-escrow
+  surface — `withdrawEscrow()`, `escrowedRefunds(address)`, `RefundEscrowed`, `EscrowWithdrawn`,
+  `NothingToWithdraw()` — had shipped in the contract but was never transcribed here, so the new
+  event replay (item 12) would have silently dropped two real on-chain events. All five are now in
+  `abi.ts`, and the two events are declared in `UNMAPPED_VAULT_EVENTS` (they carry no
+  `ChainTxKind`, so a replay reports them under `unmapped` rather than inventing a kind). The check is
+  deliberately one-way — the ABI may be a superset, because `owner()` / `transferOwnership` /
+  `acceptOwnership` / `renounceOwnership` come from OpenZeppelin's `Ownable2Step`, not from this file —
+  and it skips with a printed reason on a web-only checkout rather than passing vacuously.
+- **Historical event backfill / chain-sync loop — RESOLVED (2026-08-20, item 12).** `recordChainTx`
+  still indexes at broadcast time, but that is no longer the _only_ way a transaction can enter the
+  index: `lib/chain/events.ts` replays mined vault logs into `ChainTransaction` shape and
+  `lib/api/chainReconciler.ts` reconciles a wallet's history from them, exposed as `POST
+/api/chain/reconcile`. Pure reads — no key, no broadcast. → §17.
 
 **How the tests are gated:**
 
@@ -799,7 +908,9 @@ history, toolPolicy?})` round (`lib/ai/runner.ts`); `!geminiConfigured()` → an
     `createCheckIn(wallet, …)` (a durable `CheckIn` row; no AI tool creates one, so this duplicates
     nothing).
   - `app/api/evidence/route.ts` POST — `storeEvidence(wallet, …)`, mapping its throws to **413**
-    (over `MAX_EVIDENCE_BYTES` = 15MB) / **415** (MIME not on the allowlist). `evidence/[id]/route.ts`
+    (over `MAX_EVIDENCE_BYTES` = 15MB) / **415** (MIME not on the allowlist, or the bytes contradict the
+    declared type / are executable, archived or scriptable) / **422** (malware signature matched) / **503**
+    (a configured scanner returned no verdict — fail-closed). `evidence/[id]/route.ts`
     GET — `readEvidenceBlob` → bytes or **404** (cross-wallet non-leak). This is the §11 public upload
     entry point, SIWE-scoped because evidence is wallet-owned.
   - **Commitment prepare-only (never broadcast):** `commitments/route.ts` POST →
@@ -847,12 +958,77 @@ the app (it names the selected goal), not user text, and is appended as a system
   nothing — it only unblocks the depositor's own `prepare*` calldata, which their wallet still signs
   (rules 1–3). Back-fill is best-effort: a transient receipt-read failure never fails the already-durable
   index write — it is reported in `ChainRecordResult.backfillReason` and filled on a later re-record (or
-  by the §16 reconciler once built). Net effect: `prepareCreateCommitment` / `prepareLockFunds` /
+  by the chain-sync reconciler below, item 12). Net effect: `prepareCreateCommitment` / `prepareLockFunds` /
   `prepareClaimReward` flip from `{prepared:false}` to real calldata as soon as the registration/creation
   tx is indexed. Tests: `lib/chain/contractClient.parsers.test.ts` (7 always-on — decode + vault-address
   spoof filter), `lib/api/onchainBackfill.test.ts` (11 always-on — kind/config gating, owner/depositor
   match, idempotent reporting, best-effort throw), `lib/db/repositories/onchainId.integration.test.ts`
-  (4 DB-gated — first-writer-wins, wallet-scoping, status-stays-`CREATED`).
+  (6 DB-gated — first-writer-wins, wallet-scoping, status-stays-`CREATED`, plus the item-12 reverse
+  lookups `getGoalByOnchainId` / `getCommitmentByOnchainId`).
+- **Historical event backfill / chain-sync reconciler — RESOLVED (2026-08-20, item 12).** Until now a
+  transaction only entered the index if the browser was there to call `POST /api/chain/record` right after
+  the wallet returned a hash. Anything sent while the app was down, from a different browser, or straight
+  from a wallet / `cast` was invisible forever. `POST /api/chain/reconcile` closes that: it replays the
+  vault's past logs and reconstructs this wallet's `ChainTransaction` rows.
+  - **Two layers, both real.** `lib/chain/events.ts` is pure and network-free: `replayVaultEvents(logs,
+config)` runs viem's `parseEventLogs` over the production ABI, drops any log not emitted by the configured
+    vault, drops pending logs (no block/hash/index yet), and maps each decoded event to
+    `{kind, onchainGoalId, onchainCommitmentId, actor, title, detail}` — oldest-first by `(blockNumber,
+logIndex)`. `primaryEventPerTransaction` then collapses a multi-event transaction to the ONE row the
+    schema's `@@unique([txHash])` allows, ranked so `approveCompletion`'s pair keeps `CompletionApproved`
+    (the event carrying the confidence the threshold used) over `VerificationReceiptAccepted`, and
+    `CommitmentCreated` outranks `GoalRegistered`. `blockRangeChunks` tiles the scan so one `getLogs` never
+    asks for an unbounded span. `lib/api/chainReconciler.ts` is the orchestrator behind a
+    `ChainReconcilerDeps` seam (same pattern as `OnchainBackfillDeps`), so the whole control flow is
+    always-on testable with no RPC and no Postgres.
+  - **Attribution comes from the chain, not the caller (rule 2).** An event is this wallet's only if its
+    commitment id is in `getWalletCommitments(wallet)`, its goal id is in `getWalletGoals(wallet)`, or the
+    event's own actor field IS the wallet. Those two vault views are populated from `msg.sender` inside
+    `registerGoal` / `createCommitment`, so they are the contract's own ownership index — there is no
+    client-supplied hint anywhere in the path, and a replay therefore cannot pull a stranger's transaction
+    into a wallet's feed. `RewardFunded` is attributed to the **funder**, so a sponsor's transaction stays
+    the sponsor's.
+  - **It never overwrites what the app already wrote.** `recordChainTx` is an upsert whose update replaces
+    every column, so a naive re-record would clobber the app's richer `title`/`detail`/FKs with a generic
+    replayed one. Instead: a row that already has a `blockNumber` is reported `already-indexed` and left
+    untouched; a row missing only its `blockNumber` is re-recorded carrying **its own** existing fields
+    forward plus the block number (`block-number-filled`); only a hash with no row at all gets the replayed
+    title/detail (`recorded`). A single failing hash is reported as `skipped` with the real error message
+    rather than voiding the scan — but a genuine RPC failure propagates, so an empty report is never a lie.
+  - **Money safety (rules 2–3).** Every chain call it makes is a read (`getLogs`, `getBlockNumber`, two
+    view calls). It holds no key, signs nothing, broadcasts nothing, and writes nothing except
+    `ChainTransaction` rows derived from logs the configured vault itself emitted. It is a POST because it
+    writes to the DB, so it sits behind the same `assertSameOrigin` + `requireWallet` boundary as every
+    other write (§13.1/§13 coverage extended to it). Idempotent by construction — safe to call repeatedly.
+  - **Honest reporting, no silent caps (rule 1).** The response is a `ChainReconcileResult` of what actually
+    happened: block range, chunk count, events seen vs. events for this wallet, and per-transaction outcomes.
+    Chain unconfigured → `configured:false` with the reason spelled out, not an empty success. Events the
+    ABI has but the tx-kind enum does not (`AttestorUpdated`, `AiVerifierUpdated`, `RefundEscrowed`,
+    `EscrowWithdrawn`) are listed under `unmapped` rather than dropped, capped at 20 with the cap visible in
+    the count. `COMMITMENT_VAULT_DEPLOYMENT_BLOCK` (new, optional, `readVaultDeploymentBlock`) is where a
+    full replay starts; unset means block 0 — slower but correct — and set-but-malformed throws rather than
+    silently skipping real history.
+  - **Known limits, by design.** It is operator-triggered, not a background daemon (a cron/worker loop is
+    the production shape). It links a replayed event to a DB goal/commitment only through an **already
+    back-filled** on-chain id: there is no verifiable link from a bare log to an unlinked draft, so rather
+    than guess, such a transaction is recorded with an honest `"no DB commitment linked to on-chain
+commitment #N — recorded without that link"` reason. Reorg handling is limited to what re-running gives
+    you (a replay re-derives from current logs; it does not delete rows for logs that vanished).
+  - **Tests (all real, no mocks).** Always-on: `lib/chain/events.test.ts` (**15**) builds genuinely
+    ABI-encoded logs — topics via `encodeEventTopics`, data via `encodeAbiParameters` over the real
+    non-indexed inputs — so `parseEventLogs` actually decodes them and a wrong indexed/non-indexed split
+    fails here; it asserts all 9 lifecycle mappings, exact wei on a 30-digit amount, the foreign-contract
+    filter, pending-log skipping, ordering, the not-configured throw, exact `blockRangeChunks` tiling, and —
+    the drift guard — that **every** event in the ABI is either mapped or explicitly in
+    `UNMAPPED_VAULT_EVENTS`, so adding an event to the ABI without handling it fails the suite.
+    `lib/api/chainReconciler.test.ts` (**26**) covers gating/range resolution, on-chain attribution
+    (including a stranger's events excluded and the case-insensitive actor match), and the write outcomes —
+    with an explicit test that a block-number fill carries the app's own title/detail/FKs forward rather
+    than the replayed ones, and a run-twice idempotence test. `lib/chain/config.test.ts` (+**3**) pins
+    `readVaultDeploymentBlock`'s unset/parse/throw behaviour. `app/api/security.test.ts` (+**2**) adds the
+    new route to the 401 and cross-origin-403 matrices. DB-gated: `onchainId.integration.test.ts` (+**2**)
+    proves the reverse lookups are wallet-scoped in the read direction, which is what stops a replayed event
+    from attaching to a stranger's row (skips here — no Postgres).
 - **`/verify` "Connect data" tab — GitHub connector RESOLVED (2026-08-19, item 8); fitness/reading still
   previews.** The GitHub option is now a **real, end-to-end OAuth-backed evidence source** (rule 1 — no
   mock), gated honestly: unset OAuth env → the card shows a disabled Connect button and a "not enabled on
@@ -958,7 +1134,7 @@ boundary is testable **always-on** without a Postgres.
 **Where each §13 item is proven** (this suite closes the HTTP-boundary gap and cites the authoritative
 lower-layer proof for the invariants that live below the route):
 
-1. **Unauthorized wallet access → 401.** Always-on here: every wallet-scoped route (9 GET + 8 POST) is
+1. **Unauthorized wallet access → 401.** Always-on here: every wallet-scoped route (9 GET + 9 POST) is
    driven with no session and returns 401. POSTs carry a same-origin `Origin` so they reach `requireWallet`
    past the origin gate; GETs reach it immediately.
 2. **Cross-wallet data access → 404 read / 403 write (non-leak).** DB-gated here (`describe.skipIf(!dbReady)`):
@@ -979,10 +1155,14 @@ lower-layer proof for the invariants that live below the route):
    non-verifying message/signature → 401 (and a failed verify never reaches `ensureWallet`, so no DB write).
    The EIP-191 crypto itself (replay under a different nonce, domain mismatch, tampered/spoofed signature) is
    proven always-on in `lib/auth/siwe.test.ts` (§4).
-6. **Malicious evidence upload → 413 / 415.** Always-on here: `POST /api/evidence` with a valid session for
-   a non-multipart body → 415, a disallowed MIME (an `application/x-msdownload` blob) → 415, and a blob one
-   byte over `MAX_EVIDENCE_BYTES` → 413 — all firing before `storeEvidence`. The `fileName` path-escape guard
-   is re-asserted (a `../../etc/passwd` key rejected before touching disk) and proven fully in
+6. **Malicious evidence upload → 413 / 415 / 422 / 503.** Always-on here: `POST /api/evidence` with a valid
+   session for a non-multipart body → 415, a disallowed MIME (an `application/x-msdownload` blob) → 415, a
+   scriptable MIME (`text/html`, `image/svg+xml`) → 415, and a blob one byte over `MAX_EVIDENCE_BYTES` → 413,
+   all firing before `storeEvidence`. **Content hardening (item 10)** then rejects payloads whose bytes
+   contradict their label — an ELF renamed `proof.png` → 415, HTML smuggled under a `text/plain` label → 415 —
+   inside `storeEvidence`, before anything is hashed or written; a configured malware scanner adds 422
+   (signature matched) and 503 (no verdict — fail-closed). The `fileName` path-escape guard is re-asserted (a
+   `../../etc/passwd` key rejected before touching disk) and proven fully in
    `lib/storage/localDiskStorage.test.ts` (§13).
 7. **Prompt injection via evidence stays wrapped data.** Always-on re-assertion: `wrapEvidence` keeps a
    payload strictly inside one `<untrusted-user-evidence>` fence and `neutralizeDelimiters` filters a forged
@@ -1036,19 +1216,34 @@ implements **(a)** and deliberately omits **(b)**; the contract header (lines 40
 and points here for the production hardening. That record:
 
 - **What is enforced on-chain (not trusted to the backend).** `approveCompletion` is `onlyAttestor`, requires
-  the commitment to be in `CompletionRequested`, and reverts with `ConfidenceBelowThreshold` unless the
+  the commitment to be in `CompletionRequested`, requires a **valid EIP-712 verification receipt signed by the
+  distinct `aiVerifier`** (I7, item 11 — see below), and reverts with `ConfidenceBelowThreshold` unless the
   supplied `confidence` meets the `confidenceThreshold` the depositor **fixed write-once at creation** (I5).
   So the depositor's own bar for approval cannot be lowered by the attestor after they signed. Crucially,
   `approveCompletion` **transfers nothing** — it flips the status to `Approved`. Principal and reward then
   leave only via `releasePrincipal` / `claimReward`, which are **depositor-only, pull-based, one-shot**. No
   attestor-reachable function moves value (invariant I3).
-- **What is trusted off-chain (the actual simplification).** The contract cannot itself check that
-  "`confidence = 85`" corresponds to a real `RealityCheckEngine` verdict over real evidence — it trusts the
-  attestor to supply an honest confidence and verification hash derived from the AI pipeline. The binding
-  between "the AI verified this milestone at this confidence" and "the attestor called `approveCompletion`
-  with those numbers" lives in **backend code**, not in a cryptographic on-chain proof. The stored
-  `verificationHash` is a fingerprint the chain records but cannot recompute from evidence. This is the
-  "AI proposes, contract enforces" boundary (rule 3) at its thinnest point.
+- **What is trusted off-chain — NARROWED (2026-08-20, item 11).** Originally the contract could not check that
+  "`confidence = 85`" corresponded to a real `RealityCheckEngine` verdict: the binding between "the AI verified
+  this at this confidence" and "the attestor called `approveCompletion` with those numbers" lived only in
+  backend code. That binding is now **cryptographic**. `approveCompletion(VerificationReceipt, bytes)` takes an
+  EIP-712 receipt over `{commitmentId, goalId, milestoneRef, confidence, evidenceHash, verificationHash,
+modelVersionHash, deadline}` and reverts `InvalidVerificationReceipt` unless the recovered signer is exactly
+  the on-chain `aiVerifier` — a **second, distinct** key from the attestor (`RolesMustDiffer`, not waivable).
+  Approval is therefore **two-of-two**: the attestor can no longer invent a confidence value, and the AI
+  verifier can sign but cannot send a transaction (`getReceiptSigner()` is a frozen `{address, signReceipt}`
+  with no wallet client — `lib/chain/receipt.safety.test.ts`). The emitted
+  `VerificationReceiptAccepted(commitmentId, verifier, milestoneRef, evidenceHash, modelVersionHash,
+receiptDigest)` lets an auditor re-derive the digest off-chain and re-verify the signature. Replay is closed
+  by the domain (chainId + verifyingContract), the in-receipt `commitmentId`/`goalId`, the one-way
+  `CompletionRequested → Approved` transition, and the `deadline`.
+  **What is still trusted off-chain, honestly:** the `aiVerifier` key is a single key signing what the backend
+  pipeline hands it, and neither `evidenceHash` nor `modelVersionHash` is recomputable by the chain. So the
+  contract now proves _which AI decision_ an approval refers to, and that a distinct verifier endorsed it — not
+  that the decision itself was correct. Remaining fix: make `aiVerifier` an M-of-N/ERC-1271 signer (works with
+  **no contract change** — receipts go through `SignatureChecker`, proven by
+  `test_approveCompletion_acceptsAnErc1271ContractVerifier`). This is the "AI proposes, contract enforces"
+  boundary (rule 3) at its thinnest remaining point.
 - **Blast radius if the attestor key is stolen — deliberately bounded.** A compromised attestor can approve a
   completion that never happened. The _worst_ that unlocks: **that specific depositor** can withdraw **their
   own** principal early and claim a reward **their own sponsor** funded. It **cannot redirect a single wei to
@@ -1060,14 +1255,21 @@ and points here for the production hardening. That record:
 - **Testnet opsec simplification (cross-ref §2).** On this deployment `owner`, `attestor`, and deployer are
   the **same** account (`0xae5c…7607`). Money-safe (neither role can move a depositor's funds) but it removes
   defence-in-depth, and the key appeared in this build transcript so it **must be rotated**. **Code-prep
-  landed (2026-08-19):** the deploy script now enforces distinct roles by default (`Deploy.validateRoles`,
-  6 tests) and `contracts/DEPLOY.md` documents the distinct-EOA + Safe-multisig setup; applying it on-chain
-  is the user's rotate-key redeploy (a funded broadcast, not automated here).
+  landed (2026-08-19, extended 2026-08-20):** the deploy script now enforces distinct roles by default
+  (`Deploy.validateRoles(deployer, owner, attestor, aiVerifier, allowCollapsed)`, 10 tests) across **four**
+  roles, with `attestor != aiVerifier` unconditional, and `contracts/DEPLOY.md` documents the distinct-EOA +
+  Safe-multisig setup; applying it on-chain is the user's rotate-key redeploy (a funded broadcast, not
+  automated here).
 - **Production fix.** (1) Make the attestor a **multi-sig or M-of-N threshold** signer rather than a single
-  key. (2) Carry a **per-approval signed verification receipt**: have `approveCompletion` (or a wrapper)
-  require a signature over `{goalId, milestoneId, confidence, evidenceHash, modelVersion}` so the on-chain
-  approval is cryptographically bound to a specific, auditable AI decision — closing the "confidence value is
-  trusted" gap above. (3) Use a **distinct owner** (ideally a multi-sig) separate from the attestor, hold the
+  key. (2) **DONE in source (2026-08-20, item 11)** — the per-approval signed verification receipt described
+  here is implemented: `approveCompletion` requires an EIP-712 signature over
+  `{commitmentId, goalId, milestoneRef, confidence, evidenceHash, verificationHash, modelVersionHash,
+deadline}` from a distinct `aiVerifier`, closing the "confidence value is trusted" gap. Contract +
+  ABI + `lib/chain/receipt.ts` + tests are green (80 forge tests; cross-language digest fixture asserted from
+  both Solidity and viem). **Not yet on-chain**: the live instance predates it, so this needs the user's
+  redeploy — a funded broadcast, deliberately not automated (`contracts/DEPLOY.md`). Because
+  `SignatureChecker` accepts ERC-1271, (1) can later be satisfied by pointing `aiVerifier` at a Safe or
+  threshold verifier with **no further contract change**. (3) Use a **distinct owner** (ideally a multi-sig) separate from the attestor, hold the
   attestor key only in the backend, and **rotate** it (the contract already exposes `setAttestor`, which
   cannot block or redirect a withdrawal). **The deploy tooling now enforces (3) by default** —
   `Deploy.validateRoles` rejects a collapsed-role deploy unless `ALLOW_COLLAPSED_ROLES=true`, and
@@ -1080,24 +1282,46 @@ and points here for the production hardening. That record:
 Consolidated so a reviewer sees the whole surface at once. Each item is documented in full in the linked
 section; nothing here is new scope, and nothing below is a fake presented as working (rule 1).
 
-- **Attestor trust model** — single attestor, off-chain AI→attestor binding, no self-attestation fallback
-  (by design). Fix: threshold attestor + signed verification receipts. → §19.1, §2, §14.
+- **Attestor trust model — signed receipt landed in source (2026-08-20, item 11).** Approval is now
+  **two-of-two**: `approveCompletion(VerificationReceipt, bytes)` requires an EIP-712 signature from a
+  distinct `aiVerifier` over `{commitmentId, goalId, milestoneRef, confidence, evidenceHash,
+verificationHash, modelVersionHash, deadline}`, so the on-chain approval is cryptographically bound to one
+  auditable AI decision (`VerificationReceiptAccepted` carries the digest). `attestor != aiVerifier` is a
+  contract invariant `ALLOW_COLLAPSED_ROLES` cannot waive; the verifier key can sign but not transact.
+  `contracts/src/CommitmentVault.sol`, `lib/chain/receipt.ts`; tests: 80 forge + 52 always-on web
+  (receipt 21, receipt-safety 11, abi 20) with one digest fixture asserted from **both** Solidity and viem.
+  Still open by design: single verifier key (an M-of-N ERC-1271 signer needs no contract change), and no
+  self-attestation fallback. **Needs the user's redeploy to be live.** → §19.1, §2, §14.
 - **Attestor = owner = deployer on testnet**, and the key was exposed in-transcript. **Code-prep landed
-  (2026-08-19, items 3 & 4):** `Deploy.validateRoles` enforces three distinct accounts by default (6 tests)
-  and `contracts/DEPLOY.md` documents the distinct-EOA + Safe-multisig-owner setup. Remaining = the user's
-  rotate-key redeploy (a funded broadcast, not automated). → §2, §19.1.
+  (2026-08-19, items 3 & 4; extended 2026-08-20, item 11):** `Deploy.validateRoles` enforces **four** distinct
+  accounts by default (10 tests) and `contracts/DEPLOY.md` documents the distinct-EOA + Safe-multisig-owner
+  setup. Remaining = the user's rotate-key redeploy (a funded broadcast, not automated). → §2, §19.1.
 - **On-chain id back-fill — RESOLVED (2026-08-19).** `POST /api/chain/record` re-reads the receipt for a
   `REGISTER_GOAL` / `CREATE_COMMITMENT` hash, decodes the vault-emitted id (owner/depositor must match the
   recording wallet; foreign/spoofed logs ignored), and writes it onto the row via wallet-scoped
   first-writer-wins setters, so `prepare*` flips from `{prepared:false}` to real calldata once the tx is
   indexed. `lib/api/onchainBackfill.ts`; tests: parsers (7) + orchestrator (11) always-on, setters (4)
   DB-gated. → §17.
-- **No historical event backfill / chain-sync loop.** State is indexed at broadcast time only. Fix: an
-  event-replay reconciler. → §14.
+- **Historical event backfill / chain-sync reconciler — RESOLVED (2026-08-20, item 12).** State is no
+  longer indexed at broadcast time only: `POST /api/chain/reconcile` replays the vault's past logs
+  (`getLogs`, chunked) and reconstructs this wallet's `ChainTransaction` rows, attributing each one by the
+  vault's OWN per-wallet index (`getWalletGoals`/`getWalletCommitments`) rather than any client hint, so a
+  replay can never pull in a stranger's transaction. Pure reads — no key, no broadcast, no fund movement
+  (rules 2–3); app-written rows are never overwritten (only a missing `blockNumber` is filled). Recovers
+  transactions sent while the app was down, from another browser, or straight from a wallet / `cast`.
+  `lib/chain/events.ts`, `lib/api/chainReconciler.ts`, `app/api/chain/reconcile/route.ts`; tests: 41
+  always-on (replay 15, reconciler 26) + 3 config + 2 security-boundary, 2 DB-gated. Still open by design:
+  it is operator-triggered, not a background daemon, and it cannot back-fill an on-chain id onto a DB row
+  that has none (there is no verifiable link from a bare log to an unlinked draft) — such a transaction is
+  recorded with an honest "no DB row linked" reason. → §17, §14.
 - **EVM address validation is format-only** (no EIP-55 checksum), though SIWE now supplies real wallet
   ownership. → §9.
-- **Evidence content hardening deferred** — MIME allowlist + size cap ship; deep content-sniffing, virus
-  scanning, and EXIF/metadata scrubbing do not. Fix: add these at the upload boundary. → §13.
+- **Evidence content hardening — RESOLVED (2026-08-19, item 10).** Deep magic-byte sniffing (declared type
+  held to the real bytes; executables/archives/active content refused), a fail-closed malware-scan hook with a
+  real clamd `zINSTREAM` driver (`EVIDENCE_MALWARE_SCAN`, off by default and honestly reported as unscanned),
+  and always-on EXIF/GPS/XMP/comment scrubbing for JPEG/PNG/WebP/GIF — all inside `storeEvidence`, so no write
+  path can bypass them, and the anchored hash covers the scrubbed bytes. Still open, documented: PDF internals
+  are not sanitised, and header-based sniffing accepts image polyglots. → §13.
 - **Local-disk + S3-compatible storage drivers — RESOLVED (2026-08-19, item 9).** `EVIDENCE_STORAGE_DRIVER`
   selects `local` (default) or a real `s3` driver (from-scratch AWS SigV4 over `fetch`, no SDK; works with
   AWS S3 / Supabase / R2 / MinIO). Same interface, same content-addressed key, so switching is config-only;
@@ -1122,9 +1346,17 @@ section; nothing here is new scope, and nothing below is a fake presented as wor
 - **`ScriptedProvider` / gated tests.** The live AI, DB integration, live-chain, and deployed-vault tests are
   key-/DB-/network-gated and skip cleanly in this sandbox (§8); they are not fakes — the always-on suites
   prove the logic and the gated ones run on a configured host. → §8, §10, §14, §18.
-- **Gemini SDK + free-tier privacy.** Uses the current `@google/genai` (not the frozen legacy SDK the spec
-  pinned) entirely behind the `AIProvider` boundary; on the free tier prompts may train Google's models, so
-  raw evidence is never sent (only hashes anchored). Fix: paid tier / self-hosted inference. → §10.
+- **Gemini SDK + free-tier privacy — REVIEWED AND KEPT, mitigation now TESTED (2026-08-20, item 13).** Uses
+  the current `@google/genai` (not the frozen legacy SDK the spec pinned) entirely behind the `AIProvider`
+  boundary. Free tier is a **deliberate** choice, not an oversight: on it Google may use prompts/responses
+  for product improvement, which is acceptable here only because **no raw evidence ever reaches the model**
+  — uploaded bytes, `Evidence.contentText` and blob storage keys are unreachable from `lib/ai/` (the AI layer
+  may not even name them), there is exactly one SDK egress point, and the `AIProvider` request carries only
+  `{system, messages, tools}`. The decision log stores an evidence id/hash only. Previously documented;
+  now **enforced by 11 always-on tests** (`lib/ai/privacyBoundary.test.ts`) so a future prompt edit that
+  splices in evidence text fails in CI instead of silently leaking. Paid tier / self-hosted inference stays
+  the recommended upgrade (it removes the training caveat on the user's own chat text) but is **not** required
+  for the evidence guarantee. → §10.1.
 - **Sandbox/tooling caveats (environment, not repo defects):** Turbopack can't build in this PRoot sandbox
   so `dev`/`build` pass `--webpack` (§7); RainbowKit's unused Coinbase x402 peer deps are aliased to an empty
   module (§15); benign wallet-stack optional-dependency build warnings are left visible rather than silenced
@@ -1301,7 +1533,130 @@ a claimed reward when the commitment was cancelled`); the existing "claimable" t
   upstream). The CSRF posture is already defence-in-depth — middleware `Sec-Fetch-Site` + a `secure`,
   `sameSite=lax`, httpOnly session cookie — so host-only origin matching is the safe default; tightening it is
   deployment-specific configuration, not a code fix.
-- **Evidence MIME allowlist admits `text/*` (incl. HTML/SVG).** Safe as stored: evidence is served for
-  download with `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, so a stored HTML/SVG is
-  never rendered inline as active content in the app origin. Narrowing the allowlist (e.g. dropping SVG) is a
-  product decision about what evidence types to accept, not a security hole to patch.
+- ~~**Evidence MIME allowlist admits `text/*` (incl. HTML/SVG).**~~ **CLOSED (2026-08-19, item 10)** — no
+  longer left as-is. The allowlist now denies the scriptable types explicitly (`text/html`, `text/xml`,
+  `text/javascript`, `image/svg+xml`, `application/xml`, `application/xhtml+xml`, `application/javascript`,
+  `application/ecmascript`, `application/x-httpd-php`, `text/x-shellscript` → **415**), and content sniffing
+  independently refuses active content even when it is smuggled in under a `text/plain` label. The download
+  route still forces `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, so this is now
+  defence in depth rather than the only mitigation. Asserted always-on in `app/api/security.test.ts` §13.6
+  and `lib/evidence/storeEvidence.test.ts`. → §13.
+
+## 23. Post-build remediation — LIMITATIONS/SECURITY index items 11–13 (2026-08-20)
+
+The ordered walk through §19.2's simplifications index. Items 2–10 closed earlier (recorded in place in
+§13/§16/§17/§22); this section covers the last three. Every gate below is **real output from this session**,
+not a description of what would happen (`CLAUDE.md` "Before claiming any phase done").
+
+### 23.1 Item 11 — per-approval signed verification receipt
+
+Recorded in full in **§19.1** and **§2**. Landed **in source**: `approveCompletion(VerificationReceipt,
+bytes)` now requires an EIP-712 signature from a distinct `aiVerifier` over `{commitmentId, goalId,
+milestoneRef, confidence, evidenceHash, verificationHash, modelVersionHash, deadline}`. This is a **contract
+ABI change**, so the deployed instance at `0x0076c4269be298429af7827a2a5cc40a65f8f8a8` still has the
+one-of-one attestor path — **the redeploy is deliberately left to the user**, because broadcasting it needs a
+funded wallet and the AI holds no fund-moving key (rule 3). Gates at closeout: `forge test` **80 passed**,
+web receipt suites **52 always-on**.
+
+### 23.2 Item 12 — historical event backfill / chain-sync reconciler — DONE
+
+Full description in **§17** (behaviour, attribution, no-overwrite rule, known limits) and **§14** (the ABI
+drift guard the work uncovered). In one line: `POST /api/chain/reconcile` replays the vault's past logs and
+reconstructs this wallet's `ChainTransaction` rows, attributed by the contract's own per-wallet index, using
+reads only — no key, no broadcast, nothing overwritten.
+
+**New/changed source:** `lib/chain/events.ts` (replay + per-tx collapse + block chunking),
+`lib/api/chainReconciler.ts` (orchestrator behind a deps seam), `app/api/chain/reconcile/route.ts`,
+`lib/chain/config.ts` (`readVaultDeploymentBlock`), `lib/chain/contractClient.ts`
+(`readLatestBlockNumber`, `readVaultLogs` — both pure reads), `lib/chain/abi.ts` (the five missing
+refund-escrow declarations), `lib/db/repositories/{goals,commitments}.ts` (wallet-scoped reverse lookups),
+`lib/api/dto.ts` (`ChainReconcileResult`), plus `.env.example` / `.env.production.example`
+(`COMMITMENT_VAULT_DEPLOYMENT_BLOCK`).
+
+**Tests added:** 46 always-on (`events.test.ts` 15, `chainReconciler.test.ts` 26, `config.test.ts` +3,
+`security.test.ts` +2) and 2 DB-gated (`onchainId.integration.test.ts`).
+
+**Gates re-run this session — real output:**
+
+```
+$ pnpm --filter web typecheck
+> tsc --noEmit                                    (no output = clean)
+
+$ pnpm --filter web lint
+> eslint .                                        (no output = clean)
+
+$ pnpm format:check
+> prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ pnpm --filter web test
+ Test Files  61 passed | 7 skipped (68)
+      Tests  506 passed | 76 skipped (582)
+```
+
+The 76 skips are the documented DB-/key-/chain-gated suites (§8) — no Postgres, no `GEMINI_API_KEY` and no
+funded wallet exist in this sandbox; each prints its own reason and its reproduce command. **No contract
+change in this item, so `forge test` was not re-run for it** (item 11's 80-test run is the standing
+contract proof).
+
+**Grep gate** (`mock|fake|TODO: real|hardcoded` over the 17 files this item touched): every hit is either a
+rule-1 honesty comment that says the code does _not_ do that ("never a fake", "never fake calldata", "no
+mocks") or the pre-existing `vi.mock("next/headers")` cookie-store stub in `security.test.ts`. The new files
+— `events.ts`, `chainReconciler.ts`, `reconcile/route.ts` and both new suites — contain **zero** hits.
+
+### 23.3 Item 13 — free-tier Gemini kept, privacy boundary made airtight — DONE
+
+Full write-up in **§10.1**. The item explicitly asked to **keep** the free tier (no paid-tier migration) and
+instead prove the privacy boundary holds, so this closes as "reviewed, kept, and now enforced" rather than as
+a migration.
+
+**What was confirmed (by reading the real code, then pinning it with tests):**
+
+- **No raw evidence bytes or text ever reach the model.** `wrapEvidence` — the fence helper for evidence text
+  — has **no production call site** at all (only its own unit test and the `commitai guard` CLI demo).
+  `analyzeEvidence` is the only file in `lib/ai/` that touches an `Evidence` row, and it takes exactly
+  `type`, `id`, `goalId` and `contentHash` off it, because the verdict comes from the deterministic
+  reality-check engine keyed on evidence **type** and history (§12), never from the text. `contentText` /
+  `storageKey` appear **nowhere** under `lib/ai/`. Nothing loads stored evidence into a chat transcript: the
+  only `userMessage` builders (`app/create/CreateGoal.tsx`, `app/check-in/CheckIn.tsx`) send exactly what the
+  user typed.
+- **The decision log stores an id only.** `createDecisionInput` bounds `evidenceRef` to 256 chars against an
+  `Evidence.contentText` ceiling of 20,000, and the repo's single writer passes `evidence.id`.
+
+**What was added** — `lib/ai/privacyBoundary.test.ts`, **11 always-on tests** (no key, no network, no DB) in
+three independent layers (reachability source guard / single-egress source guard / behavioural payload capture
+through the real `runTurn`), plus the `createDecisionInput` bound and the one-writer source guard. The
+reachability guard was **verified to bite**: appending `evidence.contentText` to `lib/ai/runner.ts` makes it
+fail, and reverting makes it pass again. Documentation: new **§10.1** (judge-facing statement that the free
+tier is a deliberate tradeoff with the mitigation, not an oversight), the §19.2 index entry, and both env
+examples reworded — `.env.production.example` previously said "Use a PAID tier", which contradicted this
+item's decision.
+
+**Gates re-run this session — real output:**
+
+```
+$ pnpm --filter web typecheck
+> tsc --noEmit                                    (no output = clean)
+
+$ pnpm --filter web lint
+> eslint .                                        (no output = clean)
+
+$ pnpm format:check
+> prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+
+$ pnpm --filter web test
+ Test Files  62 passed | 7 skipped (69)
+      Tests  517 passed | 76 skipped (593)
+```
+
+**No contract change**, so `forge test` was not re-run for this item (item 11's 80-test run stands as the
+contract proof). **Grep gate** over the files this item touched
+(`lib/ai/privacyBoundary.test.ts`, `.env.example`, `.env.production.example`):
+`grep -E "mock|fake|TODO: real|hardcoded"` returns **zero hits**.
+
+**Items 11–13 are now complete.** What remains is operational and the user's, unchanged: rotate the three
+exposed secrets, refresh the git credential and push, set production secrets, apply migrations, and redeploy
+the vault so item 11's signed-receipt ABI is live.

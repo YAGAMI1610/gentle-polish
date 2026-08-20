@@ -3,6 +3,8 @@ pragma solidity 0.8.28;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 
 /// @title CommitmentVault
 /// @notice Escrow for CommitAI self-commitments: a user locks their own funds against a
@@ -23,7 +25,8 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
 ///     anyone else.
 /// I3. No function that changes a balance can be called by the owner or the attestor.
 ///     Fund movement is depositor-only, always. The owner's sole power is naming the
-///     attestor address; the attestor's sole power is attesting.
+///     attestor and AI-verifier addresses; the attestor's sole power is attesting — and
+///     it cannot even do that on its own (I7).
 /// I4. There is no slashing, no forfeiture, no admin seizure, no sweep, and no pause.
 ///     A pause is deliberately absent: a pause that could block a withdrawal would be
 ///     a freeze on funds that are not ours to freeze.
@@ -36,6 +39,12 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
 ///     its refund: the depositor's principal and the funder's reward are refunded on
 ///     independent legs (the reward leg falls back to pull-based `escrowedRefunds`), so
 ///     a rejecting funder cannot block the depositor's principal.
+/// I7. Approval takes TWO independent keys, neither of which can move money: the
+///     `attestor` must send the transaction, AND the distinct `aiVerifier` must have
+///     signed an EIP-712 {VerificationReceipt} over the exact decision being written —
+///     goal, milestone, confidence, evidence hash, model version. The two addresses are
+///     required to differ, so one stolen key approves nothing by itself. Adding a second
+///     signer changes only *who may attest* and *how provably*, never *where funds go*.
 ///
 /// The AI never holds a key that can move money. It can propose (`requestCompletion`)
 /// and attest (`approveCompletion`), and attesting only flips a flag. Every transfer is
@@ -64,12 +73,20 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
 ///     they reclaim their full principal and the sponsor reclaims the full reward.
 ///     Nobody is seized from, nothing is stranded, and no unverified reward is paid.
 ///
-/// What the attestor CAN do at worst, if its key is stolen: approve a completion that
-/// was not real, which lets that specific depositor withdraw their own principal early
-/// and take a reward their sponsor funded. It cannot redirect a single wei to the
-/// attacker. Production hardening — a multi-sig or threshold attestor, and per-approval
-/// signed verification receipts — is recorded in LIMITATIONS.md.
-contract CommitmentVault is ReentrancyGuard, Ownable2Step {
+/// What the attestor CAN do at worst, if its key is stolen: on its own, nothing.
+/// `approveCompletion` also requires an EIP-712 {VerificationReceipt} signed by the
+/// separate `aiVerifier` key (I7), so a stolen attestor key can only submit decisions the
+/// AI verifier genuinely signed — it cannot invent a confidence value or a verification
+/// hash. If BOTH keys are stolen the blast radius is the one this contract was always
+/// designed around: approve a completion that was not real, which lets that specific
+/// depositor withdraw their own principal early and take a reward their sponsor funded.
+/// Even then it cannot redirect a single wei to the attacker.
+///
+/// Remaining production hardening is recorded in LIMITATIONS.md §19.1: an M-of-N
+/// threshold verifier (possible with no further contract change — receipts are checked
+/// through ERC-1271, so `aiVerifier` may be a multisig rather than an EOA) and an
+/// optional challenge/dispute window before `Approved` unlocks withdrawals.
+contract CommitmentVault is ReentrancyGuard, Ownable2Step, EIP712 {
     // -------------------------------------------------------------------------
     // Types
     // -------------------------------------------------------------------------
@@ -115,13 +132,46 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
         uint16 confidence;
     }
 
+    /// @notice The AI decision an approval is bound to (LIMITATIONS.md §19.1 fix 2).
+    /// @dev Signed off-chain by `aiVerifier` as EIP-712 typed data and checked in
+    ///      {approveCompletion}, so the numbers written on-chain are not merely numbers
+    ///      whoever holds the attestor key chose — they are numbers a named verifier
+    ///      signed over a named goal, milestone, evidence digest and model version.
+    ///      Every field is a hash or an id: no evidence content ever appears here
+    ///      (section 9). `evidenceHash` may be zero for a decision that had no file
+    ///      evidence (e.g. a question/answer verification); `modelVersionHash` may not.
+    struct VerificationReceipt {
+        uint256 commitmentId; // pins the receipt to one commitment (anti-replay)
+        uint256 goalId; // must equal that commitment's goal
+        bytes32 milestoneRef; // opaque off-chain milestone id, or zero
+        uint16 confidence; // the confidence to be written, threshold-checked on-chain
+        bytes32 evidenceHash; // sha256 of the off-chain evidence; never the evidence
+        bytes32 verificationHash; // the section 6.5 decision digest to anchor
+        bytes32 modelVersionHash; // keccak256 of the deciding model's version string
+        uint256 deadline; // unix seconds; a stale decision stops being submittable
+    }
+
     // -------------------------------------------------------------------------
     // Storage
     // -------------------------------------------------------------------------
 
     /// @notice Backend service wallet permitted to attest verification outcomes.
-    /// @dev Holds no spending power whatsoever — see I3.
+    /// @dev Holds no spending power whatsoever — see I3. Cannot approve alone — see I7.
     address public attestor;
+
+    /// @notice Key whose signed {VerificationReceipt} every approval must carry (I7).
+    /// @dev Distinct from `attestor` by construction, and equally powerless over funds:
+    ///      a signature from this key is inert until the attestor submits it, and even
+    ///      then approval only flips a status flag. May be an EOA or an ERC-1271
+    ///      contract (multisig / threshold signer), since the check goes through
+    ///      OpenZeppelin's `SignatureChecker`.
+    address public aiVerifier;
+
+    /// @notice EIP-712 type hash of {VerificationReceipt}. Public so the off-chain signer
+    ///         and any auditor can prove they hash the identical type string.
+    bytes32 public constant VERIFICATION_RECEIPT_TYPEHASH = keccak256(
+        "VerificationReceipt(uint256 commitmentId,uint256 goalId,bytes32 milestoneRef,uint16 confidence,bytes32 evidenceHash,bytes32 verificationHash,bytes32 modelVersionHash,uint256 deadline)"
+    );
 
     uint256 public nextGoalId = 1;
     uint256 public nextCommitmentId = 1;
@@ -150,6 +200,7 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
     // -------------------------------------------------------------------------
 
     event AttestorUpdated(address indexed previousAttestor, address indexed newAttestor);
+    event AiVerifierUpdated(address indexed previousVerifier, address indexed newVerifier);
     event GoalRegistered(uint256 indexed goalId, address indexed owner, bytes32 goalHash);
     event MilestoneRegistered(
         uint256 indexed goalId,
@@ -174,6 +225,17 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
     );
     event CompletionApproved(
         uint256 indexed commitmentId, bytes32 verificationHash, uint16 confidence
+    );
+    /// @notice The AI decision an approval was cryptographically bound to (I7). Carries
+    ///         the receipt digest, so an auditor can re-derive it from the signed fields
+    ///         and check the `aiVerifier` signature independently, off-chain.
+    event VerificationReceiptAccepted(
+        uint256 indexed commitmentId,
+        address indexed verifier,
+        bytes32 indexed milestoneRef,
+        bytes32 evidenceHash,
+        bytes32 modelVersionHash,
+        bytes32 receiptDigest
     );
     event PrincipalReleased(
         uint256 indexed commitmentId, address indexed depositor, uint256 amount
@@ -207,6 +269,11 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
     error InvalidConfidenceThreshold(uint16 threshold);
     error ConfidenceBelowThreshold(uint16 confidence, uint16 threshold);
     error EmptyVerificationHash();
+    error EmptyModelVersion();
+    error RolesMustDiffer();
+    error InvalidVerificationReceipt();
+    error ReceiptCommitmentMismatch(uint256 receiptGoalId, uint256 commitmentGoalId);
+    error ReceiptExpired(uint256 deadline, uint256 currentTime);
     error RewardAlreadyFunded();
     error RewardNotFunded();
     error NoRewardConfigured();
@@ -224,28 +291,59 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
         _;
     }
 
-    /// @param initialOwner Address allowed to name the attestor. Has no spending power.
+    /// @param initialOwner Address allowed to name the attestor / AI verifier. No
+    ///        spending power.
     /// @param initialAttestor Backend service wallet allowed to attest. No spending power.
-    constructor(address initialOwner, address initialAttestor) Ownable(initialOwner) {
-        if (initialOwner == address(0) || initialAttestor == address(0)) revert ZeroAddress();
+    /// @param initialAiVerifier Key whose signed receipt every approval must carry. Must
+    ///        differ from `initialAttestor` (I7). No spending power either.
+    /// @dev Both roles are set here, so a deployed vault is never in a half-configured
+    ///      state where an approval could skip the receipt check.
+    constructor(address initialOwner, address initialAttestor, address initialAiVerifier)
+        Ownable(initialOwner)
+        EIP712("CommitAI CommitmentVault", "1")
+    {
+        if (
+            initialOwner == address(0) || initialAttestor == address(0)
+                || initialAiVerifier == address(0)
+        ) {
+            revert ZeroAddress();
+        }
+        if (initialAttestor == initialAiVerifier) revert RolesMustDiffer();
         attestor = initialAttestor;
+        aiVerifier = initialAiVerifier;
         emit AttestorUpdated(address(0), initialAttestor);
+        emit AiVerifierUpdated(address(0), initialAiVerifier);
     }
 
     // -------------------------------------------------------------------------
-    // Admin — deliberately limited to naming the attestor
+    // Admin — deliberately limited to naming the two attestation roles
     // -------------------------------------------------------------------------
 
     /// @notice Rotate the attestor key.
-    /// @dev This is the *entire* admin surface. Note what it cannot do: it cannot move
-    ///      funds, cannot alter any commitment's terms, cannot approve a completion,
-    ///      and cannot block a withdrawal. Rotating a compromised attestor key is a
-    ///      safety operation, which is why it exists.
+    /// @dev This plus {setAiVerifier} is the *entire* admin surface. Note what it cannot
+    ///      do: it cannot move funds, cannot alter any commitment's terms, cannot approve
+    ///      a completion (that needs the attestor's transaction AND the AI verifier's
+    ///      signature — I7), and cannot block a withdrawal. Rotating a compromised
+    ///      attestor key is a safety operation, which is why it exists.
     function setAttestor(address newAttestor) external onlyOwner {
         if (newAttestor == address(0)) revert ZeroAddress();
+        if (newAttestor == aiVerifier) revert RolesMustDiffer();
         address previous = attestor;
         attestor = newAttestor;
         emit AttestorUpdated(previous, newAttestor);
+    }
+
+    /// @notice Rotate the AI verifier whose signed receipts {approveCompletion} requires.
+    /// @dev Same bounded shape as {setAttestor}: moves no funds, alters no terms, approves
+    ///      nothing by itself. Must differ from the attestor — one key holding both halves
+    ///      would collapse the two-of-two back into the single-signature model it replaced
+    ///      (I7). Set it to a multisig / ERC-1271 signer for a threshold verifier.
+    function setAiVerifier(address newAiVerifier) external onlyOwner {
+        if (newAiVerifier == address(0)) revert ZeroAddress();
+        if (newAiVerifier == attestor) revert RolesMustDiffer();
+        address previous = aiVerifier;
+        aiVerifier = newAiVerifier;
+        emit AiVerifierUpdated(previous, newAiVerifier);
     }
 
     // -------------------------------------------------------------------------
@@ -418,29 +516,96 @@ contract CommitmentVault is ReentrancyGuard, Ownable2Step {
     }
 
     /// @notice Attest that verification succeeded, unlocking the depositor's withdrawals.
-    /// @dev Attestor-only, and it transfers nothing — it flips a flag. The depositor then
-    ///      pulls principal and reward in transactions they sign themselves. A stolen
-    ///      attestor key therefore cannot direct funds to an attacker (I3).
+    /// @dev TWO-OF-TWO (I7). The caller must be the `attestor`, AND `signature` must be a
+    ///      valid `aiVerifier` signature over `receipt` as EIP-712 typed data. Neither key
+    ///      approves anything alone, and neither can move value: approval still only flips
+    ///      a flag. The depositor then pulls principal and reward in transactions they sign
+    ///      themselves, so no attestation key can direct funds to an attacker (I3).
     ///
-    ///      `confidence` is checked against the threshold the depositor fixed at creation,
-    ///      so the bar is enforced on-chain rather than trusted to the backend.
-    function approveCompletion(uint256 commitmentId, bytes32 verificationHash, uint16 confidence)
+    ///      What the receipt buys (LIMITATIONS.md §19.1 production fix 2): `confidence` and
+    ///      `verificationHash` are no longer values the chain takes on the attestor's word
+    ///      — they are values a named verifier signed over a named goal, milestone,
+    ///      evidence digest and model version. The digest is emitted, so the binding is
+    ///      auditable from the log alone.
+    ///
+    ///      Replay needs no nonce: the EIP-712 domain pins the chain id and this contract,
+    ///      the receipt pins `commitmentId`, and `CompletionRequested -> Approved` is
+    ///      one-way, so a receipt cannot be spent twice. `deadline` additionally bounds how
+    ///      long a stale decision stays submittable (a zero deadline is always expired).
+    ///
+    ///      `confidence` is still checked against the threshold the depositor fixed at
+    ///      creation, so the bar is enforced on-chain rather than trusted to the backend.
+    function approveCompletion(VerificationReceipt calldata receipt, bytes calldata signature)
         external
         onlyAttestor
     {
-        Commitment storage c = _commitments[commitmentId];
-        _requireExists(c, commitmentId);
+        Commitment storage c = _commitments[receipt.commitmentId];
+        _requireExists(c, receipt.commitmentId);
         if (c.status != CommitmentStatus.CompletionRequested) revert InvalidStatus(c.status);
-        if (verificationHash == bytes32(0)) revert EmptyVerificationHash();
-        if (confidence < c.confidenceThreshold) {
-            revert ConfidenceBelowThreshold(confidence, c.confidenceThreshold);
+        if (receipt.verificationHash == bytes32(0)) revert EmptyVerificationHash();
+        if (receipt.modelVersionHash == bytes32(0)) revert EmptyModelVersion();
+        if (receipt.goalId != c.goalId) {
+            revert ReceiptCommitmentMismatch(receipt.goalId, c.goalId);
+        }
+        if (receipt.confidence < c.confidenceThreshold) {
+            revert ConfidenceBelowThreshold(receipt.confidence, c.confidenceThreshold);
+        }
+        // forge-lint: disable-next-line(block-timestamp)
+        if (receipt.deadline < block.timestamp) {
+            revert ReceiptExpired(receipt.deadline, block.timestamp);
+        }
+
+        // `aiVerifier` is never address(0) — the constructor and the setter both reject it
+        // — so there is no unset state to guard here. Accepts an EOA signature or an
+        // ERC-1271 contract signature (staticcall only), so the verifier may be a
+        // multisig / threshold signer without another contract change.
+        address verifier = aiVerifier;
+        bytes32 digest = hashVerificationReceipt(receipt);
+        if (!SignatureChecker.isValidSignatureNow(verifier, digest, signature)) {
+            revert InvalidVerificationReceipt();
         }
 
         c.status = CommitmentStatus.Approved;
-        c.verificationHash = verificationHash;
-        c.attestedConfidence = confidence;
+        c.verificationHash = receipt.verificationHash;
+        c.attestedConfidence = receipt.confidence;
 
-        emit CompletionApproved(commitmentId, verificationHash, confidence);
+        emit CompletionApproved(receipt.commitmentId, receipt.verificationHash, receipt.confidence);
+        emit VerificationReceiptAccepted(
+            receipt.commitmentId,
+            verifier,
+            receipt.milestoneRef,
+            receipt.evidenceHash,
+            receipt.modelVersionHash,
+            digest
+        );
+    }
+
+    /// @notice The EIP-712 digest `aiVerifier` must sign for `receipt`.
+    /// @dev Exposed so the backend signer and an auditor can recompute the digest from the
+    ///      contract itself rather than re-deriving the domain by hand — and so a
+    ///      cross-language conformance test can compare the two. The domain (name
+    ///      "CommitAI CommitmentVault", version "1", this chain id, this address) is also
+    ///      readable via the inherited ERC-5267 `eip712Domain()`.
+    function hashVerificationReceipt(VerificationReceipt calldata receipt)
+        public
+        view
+        returns (bytes32)
+    {
+        return _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    VERIFICATION_RECEIPT_TYPEHASH,
+                    receipt.commitmentId,
+                    receipt.goalId,
+                    receipt.milestoneRef,
+                    receipt.confidence,
+                    receipt.evidenceHash,
+                    receipt.verificationHash,
+                    receipt.modelVersionHash,
+                    receipt.deadline
+                )
+            )
+        );
     }
 
     // -------------------------------------------------------------------------

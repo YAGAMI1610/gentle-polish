@@ -10,6 +10,11 @@
  */
 import { ZodError } from "zod";
 import { WalletScopeError, CommitmentTermsLockedError } from "@/lib/db/errors";
+import {
+  EvidenceContentRejectedError,
+  EvidenceMalwareDetectedError,
+  EvidenceScanUnavailableError,
+} from "@/lib/evidence/errors";
 
 export class UnauthorizedError extends Error {
   readonly code = "UNAUTHORIZED" as const;
@@ -93,6 +98,16 @@ export function toHttpError(err: unknown): HttpErrorShape {
   if (err instanceof PayloadTooLargeError) return { status: 413, body: { error: err.message } };
   if (err instanceof UnsupportedMediaTypeError)
     return { status: 415, body: { error: err.message } };
+  // Content hardening (§13, item 10): the bytes are not what they claim to be, or
+  // are a class we refuse (executable/archive/active/unscrubbable) → 415; a matched
+  // malware signature → 422; a configured scanner that produced no verdict → 503
+  // (fail-closed: we never store an unscanned blob while claiming scanning is on).
+  if (err instanceof EvidenceContentRejectedError)
+    return { status: 415, body: { error: err.message } };
+  if (err instanceof EvidenceMalwareDetectedError)
+    return { status: 422, body: { error: err.message } };
+  if (err instanceof EvidenceScanUnavailableError)
+    return { status: 503, body: { error: err.message } };
   if (err instanceof ServiceUnavailableError) return { status: 503, body: { error: err.message } };
   if (err instanceof ZodError) return { status: 400, body: { error: "invalid request" } };
   return { status: 500, body: { error: "internal error" } };
