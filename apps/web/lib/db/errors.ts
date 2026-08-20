@@ -19,3 +19,20 @@ export class WalletScopeError extends Error {
     this.name = "WalletScopeError";
   }
 }
+
+/**
+ * Thrown when a caller tries to (re-)write the off-chain terms of a commitment
+ * whose goal is already anchored on-chain. On-chain terms are write-once (the
+ * contract's I5 "write-once terms" invariant), so the off-chain row must not be
+ * replaced either. The API layer maps this to HTTP 409 Conflict — a client-side
+ * conflict the caller should not blindly retry — rather than a 500 that would
+ * read as a server fault and page an operator.
+ */
+export class CommitmentTermsLockedError extends Error {
+  readonly code = "TERMS_LOCKED" as const;
+
+  constructor(message = "this goal already has an on-chain commitment; its terms are fixed") {
+    super(message);
+    this.name = "CommitmentTermsLockedError";
+  }
+}

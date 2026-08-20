@@ -20,18 +20,24 @@ export const commitmentVaultAbiSignatures = [
   "struct Commitment { uint256 goalId; address depositor; address rewardFunder; uint256 principalAmount; uint256 rewardAmount; uint64 deadline; uint64 gracePeriod; uint64 createdAt; uint16 confidenceThreshold; uint8 status; bool rewardFunded; bool principalWithdrawn; bool rewardWithdrawn; bytes32 verificationHash; uint16 attestedConfidence; }",
   "struct Goal { address owner; uint64 registeredAt; bytes32 goalHash; }",
   "struct MilestoneRecord { bytes32 milestoneRef; bytes32 verificationHash; uint64 registeredAt; uint16 confidence; }",
+  // Field order here is load-bearing TWICE: it is the ABI tuple layout *and* the
+  // EIP-712 struct-hash preimage the contract recomputes. See ./receipt.ts.
+  "struct VerificationReceipt { uint256 commitmentId; uint256 goalId; bytes32 milestoneRef; uint16 confidence; bytes32 evidenceHash; bytes32 verificationHash; bytes32 modelVersionHash; uint256 deadline; }",
 
   // --- public state / constants ---
   "function attestor() view returns (address)",
+  "function aiVerifier() view returns (address)",
   "function owner() view returns (address)",
   "function pendingOwner() view returns (address)",
   "function nextGoalId() view returns (uint256)",
   "function nextCommitmentId() view returns (uint256)",
   "function MAX_GRACE_PERIOD() view returns (uint64)",
+  "function VERIFICATION_RECEIPT_TYPEHASH() view returns (bytes32)",
   "function commitmentOfGoal(uint256 goalId) view returns (uint256)",
 
-  // --- admin (owner-only): the entire admin surface is naming the attestor ---
+  // --- admin (owner-only): the entire admin surface is naming the two attesting roles ---
   "function setAttestor(address newAttestor)",
+  "function setAiVerifier(address newAiVerifier)",
   "function transferOwnership(address newOwner)",
   "function acceptOwnership()",
   "function renounceOwnership()",
@@ -45,12 +51,16 @@ export const commitmentVaultAbiSignatures = [
   "function fundReward(uint256 commitmentId) payable",
   "function lockFunds(uint256 commitmentId) payable",
   "function requestCompletion(uint256 commitmentId, bytes32 verificationHash)",
-  "function approveCompletion(uint256 commitmentId, bytes32 verificationHash, uint16 confidence)",
+  // Two-of-two (invariant I7): the attestor sends this, and it only lands if the
+  // distinct `aiVerifier` signed a receipt over this exact decision.
+  "function approveCompletion(VerificationReceipt receipt, bytes signature)",
 
   // --- depositor-only, pull-based withdrawals ---
   "function releasePrincipal(uint256 commitmentId)",
   "function claimReward(uint256 commitmentId)",
   "function cancelCommitment(uint256 commitmentId)",
+  // Pull path for a refund `cancelCommitment` could not push (§22.2 escrow fix).
+  "function withdrawEscrow()",
 
   // --- views ---
   "function getCommitment(uint256 commitmentId) view returns (Commitment)",
@@ -61,9 +71,13 @@ export const commitmentVaultAbiSignatures = [
   "function getMilestones(uint256 goalId) view returns (MilestoneRecord[])",
   "function milestoneCount(uint256 goalId) view returns (uint256)",
   "function cancellationOpensAt(uint256 commitmentId) view returns (uint64)",
+  "function escrowedRefunds(address recipient) view returns (uint256)",
+  "function hashVerificationReceipt(VerificationReceipt receipt) view returns (bytes32)",
+  "function eip712Domain() view returns (bytes1 fields, string name, string version, uint256 chainId, address verifyingContract, bytes32 salt, uint256[] extensions)",
 
   // --- events (the on-chain record permitted by the §9 privacy model) ---
   "event AttestorUpdated(address indexed previousAttestor, address indexed newAttestor)",
+  "event AiVerifierUpdated(address indexed previousVerifier, address indexed newVerifier)",
   "event GoalRegistered(uint256 indexed goalId, address indexed owner, bytes32 goalHash)",
   "event MilestoneRegistered(uint256 indexed goalId, bytes32 indexed milestoneRef, bytes32 verificationHash, uint16 confidence)",
   "event CommitmentCreated(uint256 indexed commitmentId, uint256 indexed goalId, address indexed depositor, uint256 principalAmount, uint256 rewardAmount, uint64 deadline, uint64 gracePeriod, uint16 confidenceThreshold)",
@@ -71,9 +85,12 @@ export const commitmentVaultAbiSignatures = [
   "event FundsLocked(uint256 indexed commitmentId, address indexed depositor, uint256 amount)",
   "event CompletionRequested(uint256 indexed commitmentId, address indexed requester, bytes32 verificationHash)",
   "event CompletionApproved(uint256 indexed commitmentId, bytes32 verificationHash, uint16 confidence)",
+  "event VerificationReceiptAccepted(uint256 indexed commitmentId, address indexed verifier, bytes32 indexed milestoneRef, bytes32 evidenceHash, bytes32 modelVersionHash, bytes32 receiptDigest)",
   "event PrincipalReleased(uint256 indexed commitmentId, address indexed depositor, uint256 amount)",
   "event RewardClaimed(uint256 indexed commitmentId, address indexed depositor, uint256 amount)",
   "event CommitmentCancelled(uint256 indexed commitmentId, address indexed depositor, uint256 principalReturned, uint256 rewardReturned)",
+  "event RefundEscrowed(address indexed recipient, uint256 amount)",
+  "event EscrowWithdrawn(address indexed recipient, uint256 amount)",
 
   // --- custom errors (decoded from reverts) ---
   "error ZeroAddress()",
@@ -91,10 +108,16 @@ export const commitmentVaultAbiSignatures = [
   "error InvalidConfidenceThreshold(uint16 threshold)",
   "error ConfidenceBelowThreshold(uint16 confidence, uint16 threshold)",
   "error EmptyVerificationHash()",
+  "error EmptyModelVersion()",
+  "error RolesMustDiffer()",
+  "error InvalidVerificationReceipt()",
+  "error ReceiptCommitmentMismatch(uint256 receiptGoalId, uint256 commitmentGoalId)",
+  "error ReceiptExpired(uint256 deadline, uint256 currentTime)",
   "error RewardAlreadyFunded()",
   "error RewardNotFunded()",
   "error NoRewardConfigured()",
   "error AlreadyWithdrawn()",
+  "error NothingToWithdraw()",
   "error CancellationNotYetOpen(uint64 opensAt, uint64 currentTime)",
   "error TransferFailed(address to, uint256 amount)",
 ] as const;

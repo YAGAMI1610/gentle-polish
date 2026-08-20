@@ -3,7 +3,8 @@ pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {CommitmentVault} from "../src/CommitmentVault.sol";
-import {ReentrantAttacker, RejectingReceiver} from "./Attackers.sol";
+import {ReentrantAttacker, RejectingReceiver, TogglingReceiver} from "./Attackers.sol";
+import {Erc1271Verifier} from "./Signers.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title CommitmentVault test suite
@@ -15,12 +16,18 @@ contract CommitmentVaultTest is Test {
 
     address internal owner = makeAddr("owner");
     address internal attestor = makeAddr("attestor");
+    /// The second half of the two-of-two approval (I7): signs receipts, sends nothing.
+    address internal aiVerifier;
+    uint256 internal aiVerifierKey;
     address internal depositor = makeAddr("depositor");
     address internal sponsor = makeAddr("sponsor");
     address internal stranger = makeAddr("stranger");
 
     bytes32 internal constant GOAL_HASH = keccak256("goal:read-10-books");
     bytes32 internal constant VERIF_HASH = keccak256("verification-result-1");
+    bytes32 internal constant MILESTONE_REF = keccak256("milestone:book-5");
+    bytes32 internal constant EVIDENCE_HASH = keccak256("sha256-of-evidence-blob");
+    bytes32 internal constant MODEL_VERSION_HASH = keccak256("gemini-3.7-flash");
     uint256 internal constant PRINCIPAL = 20 ether;
     uint256 internal constant REWARD = 2 ether;
     uint16 internal constant THRESHOLD = 80;
@@ -37,16 +44,36 @@ contract CommitmentVaultTest is Test {
         uint16 confidenceThreshold
     );
     event FundsLocked(uint256 indexed commitmentId, address indexed depositor, uint256 amount);
-    event CompletionApproved(uint256 indexed commitmentId, bytes32 verificationHash, uint16 confidence);
-    event PrincipalReleased(uint256 indexed commitmentId, address indexed depositor, uint256 amount);
+    event CompletionApproved(
+        uint256 indexed commitmentId, bytes32 verificationHash, uint16 confidence
+    );
+    event PrincipalReleased(
+        uint256 indexed commitmentId, address indexed depositor, uint256 amount
+    );
     event RewardClaimed(uint256 indexed commitmentId, address indexed depositor, uint256 amount);
     event CommitmentCancelled(
-        uint256 indexed commitmentId, address indexed depositor, uint256 principalReturned, uint256 rewardReturned
+        uint256 indexed commitmentId,
+        address indexed depositor,
+        uint256 principalReturned,
+        uint256 rewardReturned
+    );
+    event RefundEscrowed(address indexed recipient, uint256 amount);
+    event EscrowWithdrawn(address indexed recipient, uint256 amount);
+    event AttestorUpdated(address indexed previousAttestor, address indexed newAttestor);
+    event AiVerifierUpdated(address indexed previousVerifier, address indexed newVerifier);
+    event VerificationReceiptAccepted(
+        uint256 indexed commitmentId,
+        address indexed verifier,
+        bytes32 indexed milestoneRef,
+        bytes32 evidenceHash,
+        bytes32 modelVersionHash,
+        bytes32 receiptDigest
     );
 
     function setUp() public {
+        (aiVerifier, aiVerifierKey) = makeAddrAndKey("aiVerifier");
         vm.prank(owner);
-        vault = new CommitmentVault(owner, attestor);
+        vault = new CommitmentVault(owner, attestor, aiVerifier);
         vm.deal(depositor, 100 ether);
         vm.deal(sponsor, 100 ether);
         vm.deal(stranger, 100 ether);
@@ -57,7 +84,10 @@ contract CommitmentVaultTest is Test {
     // -------------------------------------------------------------------------
 
     /// @dev Register a goal and create a commitment as `depositor`, no funds locked yet.
-    function _createCommitment(uint64 deadline, uint64 grace) internal returns (uint256 goalId, uint256 commitmentId) {
+    function _createCommitment(uint64 deadline, uint64 grace)
+        internal
+        returns (uint256 goalId, uint256 commitmentId)
+    {
         vm.startPrank(depositor);
         goalId = vault.registerGoal(GOAL_HASH);
         commitmentId = vault.createCommitment(goalId, PRINCIPAL, REWARD, deadline, grace, THRESHOLD);
@@ -76,25 +106,79 @@ contract CommitmentVaultTest is Test {
         vault.lockFunds{value: PRINCIPAL}(commitmentId);
     }
 
+    /// @dev The receipt the AI verifier signs for `id`. `goalId` is read back from the
+    ///      vault so the receipt is bound to the real commitment, as the backend does.
+    function _receipt(uint256 id, bytes32 verificationHash, uint16 confidence)
+        internal
+        view
+        returns (CommitmentVault.VerificationReceipt memory)
+    {
+        return CommitmentVault.VerificationReceipt({
+            commitmentId: id,
+            goalId: vault.getCommitment(id).goalId,
+            milestoneRef: MILESTONE_REF,
+            confidence: confidence,
+            evidenceHash: EVIDENCE_HASH,
+            verificationHash: verificationHash,
+            modelVersionHash: MODEL_VERSION_HASH,
+            deadline: block.timestamp + 1 hours
+        });
+    }
+
+    /// @dev Sign a receipt with `key`, exactly as the off-chain verifier does: EIP-712
+    ///      digest from the contract, 65-byte r||s||v signature.
+    function _sign(CommitmentVault.VerificationReceipt memory receipt, uint256 key)
+        internal
+        view
+        returns (bytes memory)
+    {
+        (uint8 v, bytes32 r, bytes32 sv) = vm.sign(key, vault.hashVerificationReceipt(receipt));
+        return abi.encodePacked(r, sv, v);
+    }
+
+    /// @dev The normal approval path (I7): the attestor submits a receipt the AI verifier
+    ///      signed. Both halves are required, so every lifecycle test goes through here.
+    function _approve(uint256 id, bytes32 verificationHash, uint16 confidence) internal {
+        CommitmentVault.VerificationReceipt memory receipt =
+            _receipt(id, verificationHash, confidence);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+        vm.prank(attestor);
+        vault.approveCompletion(receipt, signature);
+    }
+
     // -------------------------------------------------------------------------
     // Construction
     // -------------------------------------------------------------------------
 
-    function test_constructor_setsOwnerAndAttestor() public view {
+    function test_constructor_setsOwnerAttestorAndVerifier() public view {
         assertEq(vault.owner(), owner);
         assertEq(vault.attestor(), attestor);
+        assertEq(vault.aiVerifier(), aiVerifier);
         assertEq(vault.nextGoalId(), 1);
         assertEq(vault.nextCommitmentId(), 1);
     }
 
     function test_constructor_revertsOnZeroOwner() public {
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableInvalidOwner.selector, address(0)));
-        new CommitmentVault(address(0), attestor);
+        new CommitmentVault(address(0), attestor, aiVerifier);
     }
 
     function test_constructor_revertsOnZeroAttestor() public {
         vm.expectRevert(CommitmentVault.ZeroAddress.selector);
-        new CommitmentVault(owner, address(0));
+        new CommitmentVault(owner, address(0), aiVerifier);
+    }
+
+    function test_constructor_revertsOnZeroVerifier() public {
+        // No half-configured vault: a deploy that forgot the verifier cannot exist, so
+        // there is no window in which an approval could skip the receipt check (I7).
+        vm.expectRevert(CommitmentVault.ZeroAddress.selector);
+        new CommitmentVault(owner, attestor, address(0));
+    }
+
+    function test_constructor_revertsWhenAttestorIsAlsoVerifier() public {
+        // One key holding both halves is one signature, not two-of-two.
+        vm.expectRevert(CommitmentVault.RolesMustDiffer.selector);
+        new CommitmentVault(owner, attestor, attestor);
     }
 
     // -------------------------------------------------------------------------
@@ -114,19 +198,26 @@ contract CommitmentVaultTest is Test {
         vm.prank(depositor);
         vault.lockFunds{value: PRINCIPAL}(id);
         assertEq(address(vault).balance, PRINCIPAL + REWARD);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Active));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Active)
+        );
 
         // Completion requested by the attestor.
         vm.prank(attestor);
         vault.requestCompletion(id, VERIF_HASH);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.CompletionRequested));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)),
+            uint8(CommitmentVault.CommitmentStatus.CompletionRequested)
+        );
 
-        // Attestor approves at/above the threshold — flag flip only, no transfer.
+        // Approval is two-of-two: the attestor submits, the AI verifier signed. Flag
+        // flip only, no transfer.
         vm.expectEmit(true, false, false, true);
         emit CompletionApproved(id, VERIF_HASH, 92);
-        vm.prank(attestor);
-        vault.approveCompletion(id, VERIF_HASH, 92);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Approved));
+        _approve(id, VERIF_HASH, 92);
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Approved)
+        );
 
         // Depositor pulls principal, then reward.
         uint256 balBefore = depositor.balance;
@@ -143,7 +234,9 @@ contract CommitmentVaultTest is Test {
 
         assertEq(depositor.balance, balBefore + PRINCIPAL + REWARD);
         assertEq(address(vault).balance, 0);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Closed));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Closed)
+        );
     }
 
     function test_happyPath_noReward() public {
@@ -154,8 +247,7 @@ contract CommitmentVaultTest is Test {
         vault.requestCompletion(id, VERIF_HASH);
         vm.stopPrank();
 
-        vm.prank(attestor);
-        vault.approveCompletion(id, VERIF_HASH, THRESHOLD);
+        _approve(id, VERIF_HASH, THRESHOLD);
 
         // No reward configured → claimReward must revert, not send stray funds. Checked
         // here while still Approved: after releasePrincipal the sole funded leg is drained
@@ -170,7 +262,9 @@ contract CommitmentVaultTest is Test {
         vault.releasePrincipal(id);
         assertEq(depositor.balance, balBefore + PRINCIPAL);
         assertEq(address(vault).balance, 0);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Closed));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Closed)
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -191,7 +285,9 @@ contract CommitmentVaultTest is Test {
         assertEq(depositor.balance, depBefore + PRINCIPAL);
         assertEq(sponsor.balance, sponBefore + REWARD);
         assertEq(address(vault).balance, 0);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled)
+        );
     }
 
     function test_cancel_beforeLock_isAllowedImmediately() public {
@@ -199,7 +295,9 @@ contract CommitmentVaultTest is Test {
         // No funds locked yet: cancellation is open even with a future deadline.
         vm.prank(depositor);
         vault.cancelCommitment(id);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled)
+        );
     }
 
     function test_cancel_deadlineGoal_blockedUntilGraceElapses() public {
@@ -211,7 +309,9 @@ contract CommitmentVaultTest is Test {
         vm.prank(depositor);
         vm.expectRevert(
             abi.encodeWithSelector(
-                CommitmentVault.CancellationNotYetOpen.selector, deadline + grace, uint64(block.timestamp)
+                CommitmentVault.CancellationNotYetOpen.selector,
+                deadline + grace,
+                uint64(block.timestamp)
             )
         );
         vault.cancelCommitment(id);
@@ -221,7 +321,9 @@ contract CommitmentVaultTest is Test {
         vm.prank(depositor);
         vm.expectRevert(
             abi.encodeWithSelector(
-                CommitmentVault.CancellationNotYetOpen.selector, deadline + grace, uint64(block.timestamp)
+                CommitmentVault.CancellationNotYetOpen.selector,
+                deadline + grace,
+                uint64(block.timestamp)
             )
         );
         vault.cancelCommitment(id);
@@ -242,15 +344,16 @@ contract CommitmentVaultTest is Test {
         // Depositor changes their mind while awaiting attestation: still fully refundable.
         vm.prank(depositor);
         vault.cancelCommitment(id);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled)
+        );
     }
 
     function test_cancel_afterApproval_isRejected() public {
         (, uint256 id) = _activeCommitment(0, 0);
         vm.prank(depositor);
         vault.requestCompletion(id, VERIF_HASH);
-        vm.prank(attestor);
-        vault.approveCompletion(id, VERIF_HASH, 90);
+        _approve(id, VERIF_HASH, 90);
 
         // Once approved, the withdrawal path is release/claim, not cancel.
         vm.prank(depositor);
@@ -295,8 +398,7 @@ contract CommitmentVaultTest is Test {
         attacker.lockFunds{value: PRINCIPAL}(id);
         vm.prank(address(attacker));
         attacker.requestCompletion(id, VERIF_HASH);
-        vm.prank(attestor);
-        vault.approveCompletion(id, VERIF_HASH, 90);
+        _approve(id, VERIF_HASH, 90);
 
         attacker.setTarget(id, ReentrantAttacker.Target.ReleasePrincipal);
 
@@ -339,19 +441,29 @@ contract CommitmentVaultTest is Test {
         vm.prank(depositor);
         vault.requestCompletion(id, VERIF_HASH);
 
+        // A perfectly valid AI-verifier receipt is still inert in the wrong hands: the
+        // caller check runs first, so none of these get as far as the signature.
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 99);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
         // Depositor cannot self-approve.
         vm.prank(depositor);
         vm.expectRevert(abi.encodeWithSelector(CommitmentVault.NotAttestor.selector, depositor));
-        vault.approveCompletion(id, VERIF_HASH, 99);
+        vault.approveCompletion(receipt, signature);
 
         // Owner cannot approve either — admin has no attestation power.
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(CommitmentVault.NotAttestor.selector, owner));
-        vault.approveCompletion(id, VERIF_HASH, 99);
+        vault.approveCompletion(receipt, signature);
 
         vm.prank(stranger);
         vm.expectRevert(abi.encodeWithSelector(CommitmentVault.NotAttestor.selector, stranger));
-        vault.approveCompletion(id, VERIF_HASH, 99);
+        vault.approveCompletion(receipt, signature);
+
+        // Nor can the AI verifier itself: it signs, it does not submit.
+        vm.prank(aiVerifier);
+        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.NotAttestor.selector, aiVerifier));
+        vault.approveCompletion(receipt, signature);
     }
 
     function test_approveCompletion_belowThreshold_reverts() public {
@@ -359,21 +471,31 @@ contract CommitmentVaultTest is Test {
         vm.prank(depositor);
         vault.requestCompletion(id, VERIF_HASH);
 
+        // Signed by the real verifier, and still refused: the depositor's write-once bar
+        // is enforced by the contract, not by whoever signed (I5).
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, THRESHOLD - 1);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
         vm.prank(attestor);
         vm.expectRevert(
-            abi.encodeWithSelector(CommitmentVault.ConfidenceBelowThreshold.selector, THRESHOLD - 1, THRESHOLD)
+            abi.encodeWithSelector(
+                CommitmentVault.ConfidenceBelowThreshold.selector, THRESHOLD - 1, THRESHOLD
+            )
         );
-        vault.approveCompletion(id, VERIF_HASH, THRESHOLD - 1);
+        vault.approveCompletion(receipt, signature);
     }
 
     function test_approveCompletion_requiresCompletionRequestedState() public {
         (, uint256 id) = _activeCommitment(0, 0);
         // Skipped requestCompletion — still Active.
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
         vm.prank(attestor);
         vm.expectRevert(
-            abi.encodeWithSelector(CommitmentVault.InvalidStatus.selector, CommitmentVault.CommitmentStatus.Active)
+            abi.encodeWithSelector(
+                CommitmentVault.InvalidStatus.selector, CommitmentVault.CommitmentStatus.Active
+            )
         );
-        vault.approveCompletion(id, VERIF_HASH, 90);
+        vault.approveCompletion(receipt, signature);
     }
 
     // -------------------------------------------------------------------------
@@ -384,8 +506,7 @@ contract CommitmentVaultTest is Test {
         (, uint256 id) = _activeCommitment(0, 0);
         vm.prank(depositor);
         vault.requestCompletion(id, VERIF_HASH);
-        vm.prank(attestor);
-        vault.approveCompletion(id, VERIF_HASH, 90);
+        _approve(id, VERIF_HASH, 90);
 
         vm.prank(depositor);
         vault.releasePrincipal(id);
@@ -401,8 +522,7 @@ contract CommitmentVaultTest is Test {
         (, uint256 id) = _activeCommitment(0, 0);
         vm.prank(depositor);
         vault.requestCompletion(id, VERIF_HASH);
-        vm.prank(attestor);
-        vault.approveCompletion(id, VERIF_HASH, 90);
+        _approve(id, VERIF_HASH, 90);
 
         vm.prank(depositor);
         vault.claimReward(id);
@@ -433,8 +553,7 @@ contract CommitmentVaultTest is Test {
         (, uint256 id) = _activeCommitment(0, 0);
         vm.prank(depositor);
         vault.requestCompletion(id, VERIF_HASH);
-        vm.prank(attestor);
-        vault.approveCompletion(id, VERIF_HASH, 90);
+        _approve(id, VERIF_HASH, 90);
 
         vm.prank(stranger);
         vm.expectRevert(abi.encodeWithSelector(CommitmentVault.NotDepositor.selector, stranger));
@@ -449,8 +568,7 @@ contract CommitmentVaultTest is Test {
         (, uint256 id) = _activeCommitment(0, 0);
         vm.prank(depositor);
         vault.requestCompletion(id, VERIF_HASH);
-        vm.prank(attestor);
-        vault.approveCompletion(id, VERIF_HASH, 90);
+        _approve(id, VERIF_HASH, 90);
 
         vm.prank(stranger);
         vm.expectRevert(abi.encodeWithSelector(CommitmentVault.NotDepositor.selector, stranger));
@@ -470,8 +588,7 @@ contract CommitmentVaultTest is Test {
 
         vm.prank(depositor);
         vault.requestCompletion(id, VERIF_HASH);
-        vm.prank(attestor);
-        vault.approveCompletion(id, VERIF_HASH, 90);
+        _approve(id, VERIF_HASH, 90);
 
         CommitmentVault.Commitment memory c1 = vault.getCommitment(id);
         assertEq(c1.rewardAmount, c0.rewardAmount);
@@ -492,17 +609,21 @@ contract CommitmentVaultTest is Test {
 
         // Non-owner cannot rotate.
         vm.prank(stranger);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger)
+        );
         vault.setAttestor(stranger);
 
         // The rotated-in attestor can now approve; the old one cannot.
         vm.prank(depositor);
         vault.requestCompletion(id, VERIF_HASH);
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
         vm.prank(attestor);
         vm.expectRevert(abi.encodeWithSelector(CommitmentVault.NotAttestor.selector, attestor));
-        vault.approveCompletion(id, VERIF_HASH, 90);
+        vault.approveCompletion(receipt, signature);
         vm.prank(newAttestor);
-        vault.approveCompletion(id, VERIF_HASH, 90);
+        vault.approveCompletion(receipt, signature);
     }
 
     // -------------------------------------------------------------------------
@@ -512,7 +633,11 @@ contract CommitmentVaultTest is Test {
     function test_lockFunds_wrongAmount_reverts() public {
         (, uint256 id) = _createCommitment(0, 0);
         vm.prank(depositor);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.IncorrectValue.selector, PRINCIPAL, PRINCIPAL - 1));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CommitmentVault.IncorrectValue.selector, PRINCIPAL, PRINCIPAL - 1
+            )
+        );
         vault.lockFunds{value: PRINCIPAL - 1}(id);
     }
 
@@ -526,7 +651,9 @@ contract CommitmentVaultTest is Test {
     function test_fundReward_wrongAmount_reverts() public {
         (, uint256 id) = _createCommitment(0, 0);
         vm.prank(sponsor);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.IncorrectValue.selector, REWARD, REWARD + 1));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.IncorrectValue.selector, REWARD, REWARD + 1)
+        );
         vault.fundReward{value: REWARD + 1}(id);
     }
 
@@ -550,9 +677,13 @@ contract CommitmentVaultTest is Test {
     function test_createCommitment_badThreshold_reverts() public {
         vm.startPrank(depositor);
         uint256 goalId = vault.registerGoal(GOAL_HASH);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.InvalidConfidenceThreshold.selector, uint16(0)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.InvalidConfidenceThreshold.selector, uint16(0))
+        );
         vault.createCommitment(goalId, PRINCIPAL, REWARD, 0, 0, 0);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.InvalidConfidenceThreshold.selector, uint16(101)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.InvalidConfidenceThreshold.selector, uint16(101))
+        );
         vault.createCommitment(goalId, PRINCIPAL, REWARD, 0, 0, 101);
         vm.stopPrank();
     }
@@ -562,7 +693,11 @@ contract CommitmentVaultTest is Test {
         vm.startPrank(depositor);
         uint256 goalId = vault.registerGoal(GOAL_HASH);
         uint64 past = uint64(block.timestamp - 1);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.DeadlineInPast.selector, past, uint64(block.timestamp)));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CommitmentVault.DeadlineInPast.selector, past, uint64(block.timestamp)
+            )
+        );
         vault.createCommitment(goalId, PRINCIPAL, REWARD, past, 0, THRESHOLD);
         vm.stopPrank();
     }
@@ -572,9 +707,13 @@ contract CommitmentVaultTest is Test {
         uint256 goalId = vault.registerGoal(GOAL_HASH);
         uint64 tooLong = vault.MAX_GRACE_PERIOD() + 1;
         vm.expectRevert(
-            abi.encodeWithSelector(CommitmentVault.GracePeriodTooLong.selector, tooLong, vault.MAX_GRACE_PERIOD())
+            abi.encodeWithSelector(
+                CommitmentVault.GracePeriodTooLong.selector, tooLong, vault.MAX_GRACE_PERIOD()
+            )
         );
-        vault.createCommitment(goalId, PRINCIPAL, REWARD, uint64(block.timestamp + 1 days), tooLong, THRESHOLD);
+        vault.createCommitment(
+            goalId, PRINCIPAL, REWARD, uint64(block.timestamp + 1 days), tooLong, THRESHOLD
+        );
         vm.stopPrank();
     }
 
@@ -589,7 +728,9 @@ contract CommitmentVaultTest is Test {
     function test_createCommitment_oneCommitmentPerGoal() public {
         (uint256 goalId,) = _createCommitment(0, 0);
         vm.prank(depositor);
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.GoalAlreadyCommitted.selector, goalId));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.GoalAlreadyCommitted.selector, goalId)
+        );
         vault.createCommitment(goalId, PRINCIPAL, REWARD, 0, 0, THRESHOLD);
     }
 
@@ -610,10 +751,87 @@ contract CommitmentVaultTest is Test {
         // Refund transfer fails → the whole cancel reverts atomically; funds stay put
         // and status is unchanged (still Active), so it can be retried later.
         vm.prank(address(rr));
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.TransferFailed.selector, address(rr), PRINCIPAL));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.TransferFailed.selector, address(rr), PRINCIPAL)
+        );
         rr.cancel(id);
-        assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Active));
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Active)
+        );
         assertEq(address(vault).balance, PRINCIPAL);
+    }
+
+    // -------------------------------------------------------------------------
+    // Rejecting REWARD FUNDER cannot block the depositor's principal (escrow fix)
+    // -------------------------------------------------------------------------
+
+    function test_cancel_rejectingRewardFunder_doesNotBlockPrincipal() public {
+        TogglingReceiver funder = new TogglingReceiver(vault); // accept == false → rejects ETH
+        vm.deal(address(funder), REWARD);
+
+        // Open-ended commitment (deadline 0) so cancellation is immediately available.
+        vm.startPrank(depositor);
+        uint256 goalId = vault.registerGoal(GOAL_HASH);
+        uint256 id = vault.createCommitment(goalId, PRINCIPAL, REWARD, 0, 0, THRESHOLD);
+        vm.stopPrank();
+
+        // A third-party funder that rejects ETH funds the reward; depositor locks principal.
+        funder.fundReward(id, REWARD);
+        vm.prank(depositor);
+        vault.lockFunds{value: PRINCIPAL}(id);
+
+        uint256 depBefore = depositor.balance;
+
+        // The reward refund cannot be pushed (funder rejects) → it escrows without
+        // reverting, and the depositor's principal still goes out. Cancel SUCCEEDS
+        // (before the fix this reverted, stranding the principal).
+        vm.expectEmit(true, true, false, true);
+        emit CommitmentCancelled(id, depositor, PRINCIPAL, REWARD);
+        vm.expectEmit(true, false, false, true);
+        emit RefundEscrowed(address(funder), REWARD);
+        vm.prank(depositor);
+        vault.cancelCommitment(id);
+
+        assertEq(depositor.balance, depBefore + PRINCIPAL, "principal returned to depositor");
+        assertEq(vault.escrowedRefunds(address(funder)), REWARD, "reward held in escrow for funder");
+        assertEq(address(vault).balance, REWARD, "only the escrowed reward remains");
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Cancelled)
+        );
+    }
+
+    function test_withdrawEscrow_pullsEscrowedRefund() public {
+        TogglingReceiver funder = new TogglingReceiver(vault);
+        vm.deal(address(funder), REWARD);
+
+        vm.startPrank(depositor);
+        uint256 goalId = vault.registerGoal(GOAL_HASH);
+        uint256 id = vault.createCommitment(goalId, PRINCIPAL, REWARD, 0, 0, THRESHOLD);
+        vm.stopPrank();
+        funder.fundReward(id, REWARD);
+        vm.prank(depositor);
+        vault.lockFunds{value: PRINCIPAL}(id);
+        vm.prank(depositor);
+        vault.cancelCommitment(id); // reward escrows: funder still rejecting
+
+        assertEq(vault.escrowedRefunds(address(funder)), REWARD);
+        assertEq(address(funder).balance, 0);
+
+        // Funder can now accept and pull exactly its escrowed reward — no one else can.
+        funder.setAccept(true);
+        vm.expectEmit(true, false, false, true);
+        emit EscrowWithdrawn(address(funder), REWARD);
+        funder.withdrawEscrow();
+
+        assertEq(address(funder).balance, REWARD, "funder pulled its reward");
+        assertEq(vault.escrowedRefunds(address(funder)), 0, "escrow cleared");
+        assertEq(address(vault).balance, 0, "vault fully drained");
+    }
+
+    function test_withdrawEscrow_revertsWhenNothingOwed() public {
+        vm.prank(stranger);
+        vm.expectRevert(CommitmentVault.NothingToWithdraw.selector);
+        vault.withdrawEscrow();
     }
 
     // -------------------------------------------------------------------------
@@ -661,7 +879,9 @@ contract CommitmentVaultTest is Test {
     // -------------------------------------------------------------------------
 
     function test_getCommitment_unknownReverts() public {
-        vm.expectRevert(abi.encodeWithSelector(CommitmentVault.UnknownCommitment.selector, uint256(999)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.UnknownCommitment.selector, uint256(999))
+        );
         vault.getCommitment(999);
     }
 
@@ -720,15 +940,509 @@ contract CommitmentVaultTest is Test {
         vault.requestCompletion(id, VERIF_HASH);
         vm.stopPrank();
 
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, confidence);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
         vm.prank(attestor);
         if (confidence < threshold) {
             vm.expectRevert(
-                abi.encodeWithSelector(CommitmentVault.ConfidenceBelowThreshold.selector, confidence, threshold)
+                abi.encodeWithSelector(
+                    CommitmentVault.ConfidenceBelowThreshold.selector, confidence, threshold
+                )
             );
-            vault.approveCompletion(id, VERIF_HASH, confidence);
+            vault.approveCompletion(receipt, signature);
         } else {
-            vault.approveCompletion(id, VERIF_HASH, confidence);
-            assertEq(uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Approved));
+            vault.approveCompletion(receipt, signature);
+            assertEq(
+                uint8(vault.getCommitmentStatus(id)),
+                uint8(CommitmentVault.CommitmentStatus.Approved)
+            );
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Per-approval signed verification receipt (I7; LIMITATIONS §19.1 fix 2)
+    // -------------------------------------------------------------------------
+
+    /// @dev A commitment sitting in `CompletionRequested`, ready to be approved.
+    function _pendingApproval() internal returns (uint256 id) {
+        (, id) = _activeCommitment(0, 0);
+        vm.prank(depositor);
+        vault.requestCompletion(id, VERIF_HASH);
+    }
+
+    function test_approveCompletion_emitsTheReceiptBinding() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+        bytes32 digest = vault.hashVerificationReceipt(receipt);
+
+        // The log carries the digest, so an auditor can re-derive it from the signed
+        // fields and check the verifier's signature themselves, off-chain.
+        vm.expectEmit(true, true, true, true);
+        emit VerificationReceiptAccepted(
+            id, aiVerifier, MILESTONE_REF, EVIDENCE_HASH, MODEL_VERSION_HASH, digest
+        );
+        vm.prank(attestor);
+        vault.approveCompletion(receipt, signature);
+
+        CommitmentVault.Commitment memory c = vault.getCommitment(id);
+        assertEq(uint8(c.status), uint8(CommitmentVault.CommitmentStatus.Approved));
+        assertEq(c.verificationHash, VERIF_HASH);
+        assertEq(c.attestedConfidence, 90);
+    }
+
+    function test_approveCompletion_rejectsSignatureFromAnyOtherKey() public {
+        uint256 id = _pendingApproval();
+        (, uint256 strangerKey) = makeAddrAndKey("notTheVerifier");
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        bytes memory strangerSignature = _sign(receipt, strangerKey);
+
+        // This is the whole point of item 11: holding the attestor key is no longer
+        // enough to write a confidence value on-chain.
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(receipt, strangerSignature);
+    }
+
+    function test_approveCompletion_rejectsTamperedConfidence() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 85);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
+        // Both values clear the depositor's threshold, so only the signature stops this.
+        receipt.confidence = 99;
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(receipt, signature);
+    }
+
+    function test_approveCompletion_rejectsTamperedVerificationHash() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
+        receipt.verificationHash = keccak256("a different decision");
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(receipt, signature);
+    }
+
+    function test_approveCompletion_rejectsTamperedEvidenceOrModelVersion() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
+        // Which evidence and which model decided are part of the signed statement, so
+        // neither can be rewritten after the fact.
+        CommitmentVault.VerificationReceipt memory swappedEvidence = receipt;
+        swappedEvidence.evidenceHash = keccak256("someone else's evidence");
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(swappedEvidence, signature);
+
+        CommitmentVault.VerificationReceipt memory swappedModel = receipt;
+        swappedModel.modelVersionHash = keccak256("some-other-model");
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(swappedModel, signature);
+    }
+
+    function test_approveCompletion_receiptIsBoundToItsOwnCommitment() public {
+        uint256 first = _pendingApproval();
+
+        // A second, independent commitment from the same depositor, also awaiting
+        // attestation. The first receipt must not be able to approve it.
+        address other = makeAddr("otherDepositor");
+        vm.deal(other, PRINCIPAL);
+        vm.startPrank(other);
+        uint256 otherGoal = vault.registerGoal(keccak256("goal:run-a-marathon"));
+        uint256 second = vault.createCommitment(otherGoal, PRINCIPAL, 0, 0, 0, THRESHOLD);
+        vault.lockFunds{value: PRINCIPAL}(second);
+        vault.requestCompletion(second, VERIF_HASH);
+        vm.stopPrank();
+
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(first, VERIF_HASH, 90);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+        vm.prank(attestor);
+        vault.approveCompletion(receipt, signature);
+
+        // The vault approved the commitment the receipt names, and only that one.
+        assertEq(
+            uint8(vault.getCommitmentStatus(first)),
+            uint8(CommitmentVault.CommitmentStatus.Approved)
+        );
+        assertEq(
+            uint8(vault.getCommitmentStatus(second)),
+            uint8(CommitmentVault.CommitmentStatus.CompletionRequested)
+        );
+
+        // Re-pointing that same signed receipt at the other commitment breaks its
+        // signature: `commitmentId` is one of the signed fields.
+        receipt.commitmentId = second;
+        receipt.goalId = otherGoal;
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(receipt, signature);
+    }
+
+    function test_approveCompletion_cannotReplayTheSameReceipt() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
+        vm.prank(attestor);
+        vault.approveCompletion(receipt, signature);
+
+        // No nonce needed: `CompletionRequested -> Approved` is one-way, so the receipt
+        // is spent. (The EIP-712 domain already pins chain id and this contract.)
+        vm.prank(attestor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CommitmentVault.InvalidStatus.selector, CommitmentVault.CommitmentStatus.Approved
+            )
+        );
+        vault.approveCompletion(receipt, signature);
+    }
+
+    function test_approveCompletion_rejectsExpiredReceipt() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
+        vm.warp(receipt.deadline + 1);
+        vm.prank(attestor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CommitmentVault.ReceiptExpired.selector, receipt.deadline, block.timestamp
+            )
+        );
+        vault.approveCompletion(receipt, signature);
+    }
+
+    function test_approveCompletion_rejectsZeroDeadlineAsExpired() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        receipt.deadline = 0;
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
+        // A missing deadline is not "no expiry" — it is already expired, so a signer
+        // cannot accidentally mint an eternal receipt.
+        vm.prank(attestor);
+        vm.expectRevert(
+            abi.encodeWithSelector(CommitmentVault.ReceiptExpired.selector, 0, block.timestamp)
+        );
+        vault.approveCompletion(receipt, signature);
+    }
+
+    function test_approveCompletion_acceptsReceiptAtExactDeadline() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
+        vm.warp(receipt.deadline);
+        vm.prank(attestor);
+        vault.approveCompletion(receipt, signature);
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Approved)
+        );
+    }
+
+    function test_approveCompletion_requiresAModelVersion() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        receipt.modelVersionHash = bytes32(0);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
+        // "Which model decided this" is mandatory — that is what makes the approval
+        // auditable rather than merely signed.
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.EmptyModelVersion.selector);
+        vault.approveCompletion(receipt, signature);
+    }
+
+    function test_approveCompletion_requiresANonEmptyVerificationHash() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, bytes32(0), 90);
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.EmptyVerificationHash.selector);
+        vault.approveCompletion(receipt, signature);
+    }
+
+    function test_approveCompletion_rejectsGoalIdThatIsNotTheCommitmentsGoal() public {
+        uint256 id = _pendingApproval();
+        uint256 realGoal = vault.getCommitment(id).goalId;
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        receipt.goalId = realGoal + 1;
+        bytes memory signature = _sign(receipt, aiVerifierKey);
+
+        // Signed correctly, but it describes a different goal — the chain knows which
+        // goal this commitment belongs to and will not accept a mismatched decision.
+        vm.prank(attestor);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CommitmentVault.ReceiptCommitmentMismatch.selector, realGoal + 1, realGoal
+            )
+        );
+        vault.approveCompletion(receipt, signature);
+    }
+
+    function test_approveCompletion_rejectsMalformedSignatures() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(receipt, "");
+
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(receipt, new bytes(65));
+    }
+
+    function test_approveCompletion_rejectsReceiptSignedForAnotherChain() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+
+        // Same fields, same verifier key, but the digest was built for a different chain
+        // id — the EIP-712 domain makes it useless here (no cross-chain replay).
+        bytes32 foreignDomain = keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256("CommitAI CommitmentVault"),
+                keccak256("1"),
+                block.chainid + 1,
+                address(vault)
+            )
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(
+                vault.VERIFICATION_RECEIPT_TYPEHASH(),
+                receipt.commitmentId,
+                receipt.goalId,
+                receipt.milestoneRef,
+                receipt.confidence,
+                receipt.evidenceHash,
+                receipt.verificationHash,
+                receipt.modelVersionHash,
+                receipt.deadline
+            )
+        );
+        (uint8 v, bytes32 r, bytes32 sv) = vm.sign(
+            aiVerifierKey, keccak256(abi.encodePacked(hex"1901", foreignDomain, structHash))
+        );
+
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(receipt, abi.encodePacked(r, sv, v));
+    }
+
+    function test_approveCompletion_acceptsAnErc1271ContractVerifier() public {
+        // The production hardening path (§19.1 fix 1): make the verifier a multisig /
+        // threshold signer. No contract change needed — receipts are checked through
+        // `SignatureChecker`, so a contract signer works today.
+        (address safeSigner, uint256 safeKey) = makeAddrAndKey("safeSigner");
+        Erc1271Verifier contractVerifier = new Erc1271Verifier(safeSigner);
+        vm.prank(owner);
+        vault.setAiVerifier(address(contractVerifier));
+
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+
+        // A signature the contract does not authorize is still refused.
+        (, uint256 outsiderKey) = makeAddrAndKey("outsider");
+        bytes memory outsiderSignature = _sign(receipt, outsiderKey);
+        bytes memory safeSignature = _sign(receipt, safeKey);
+
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(receipt, outsiderSignature);
+
+        vm.prank(attestor);
+        vault.approveCompletion(receipt, safeSignature);
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Approved)
+        );
+    }
+
+    function test_setAiVerifier_rotationInvalidatesTheOldKey() public {
+        uint256 id = _pendingApproval();
+        CommitmentVault.VerificationReceipt memory receipt = _receipt(id, VERIF_HASH, 90);
+        bytes memory oldSignature = _sign(receipt, aiVerifierKey);
+
+        (address newVerifier, uint256 newKey) = makeAddrAndKey("rotatedVerifier");
+        vm.expectEmit(true, true, false, false);
+        emit AiVerifierUpdated(aiVerifier, newVerifier);
+        vm.prank(owner);
+        vault.setAiVerifier(newVerifier);
+        assertEq(vault.aiVerifier(), newVerifier);
+
+        // Rotating a compromised verifier key retires its outstanding receipts.
+        vm.prank(attestor);
+        vm.expectRevert(CommitmentVault.InvalidVerificationReceipt.selector);
+        vault.approveCompletion(receipt, oldSignature);
+
+        bytes memory rotatedSignature = _sign(receipt, newKey);
+        vm.prank(attestor);
+        vault.approveCompletion(receipt, rotatedSignature);
+        assertEq(
+            uint8(vault.getCommitmentStatus(id)), uint8(CommitmentVault.CommitmentStatus.Approved)
+        );
+        // Rotation moved nothing.
+        assertEq(address(vault).balance, PRINCIPAL + REWARD);
+    }
+
+    function test_setAiVerifier_onlyOwnerAndNeverZero() public {
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger)
+        );
+        vault.setAiVerifier(stranger);
+
+        // Not even the attestor can name the key that vouches for its own submissions.
+        vm.prank(attestor);
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attestor)
+        );
+        vault.setAiVerifier(attestor);
+
+        vm.prank(owner);
+        vm.expectRevert(CommitmentVault.ZeroAddress.selector);
+        vault.setAiVerifier(address(0));
+    }
+
+    function test_theTwoRolesCanNeverCollapseIntoOneAddress() public {
+        // Neither setter can point both roles at one key — that would turn the
+        // two-of-two back into a single signature (I7).
+        vm.prank(owner);
+        vm.expectRevert(CommitmentVault.RolesMustDiffer.selector);
+        vault.setAiVerifier(attestor);
+
+        vm.prank(owner);
+        vm.expectRevert(CommitmentVault.RolesMustDiffer.selector);
+        vault.setAttestor(aiVerifier);
+
+        assertEq(vault.attestor(), attestor);
+        assertEq(vault.aiVerifier(), aiVerifier);
+    }
+
+    // -------------------------------------------------------------------------
+    // EIP-712 domain / type hash — the exact bytes the off-chain signer must reproduce
+    // -------------------------------------------------------------------------
+
+    function test_verificationReceiptTypeHash_matchesTheDocumentedTypeString() public view {
+        assertEq(
+            vault.VERIFICATION_RECEIPT_TYPEHASH(),
+            keccak256(
+                "VerificationReceipt(uint256 commitmentId,uint256 goalId,bytes32 milestoneRef,uint16 confidence,bytes32 evidenceHash,bytes32 verificationHash,bytes32 modelVersionHash,uint256 deadline)"
+            )
+        );
+    }
+
+    function test_eip712Domain_isTheDocumentedDomain() public view {
+        (
+            ,
+            string memory name,
+            string memory version,
+            uint256 chainId,
+            address verifyingContract,,
+        ) = vault.eip712Domain();
+        assertEq(name, "CommitAI CommitmentVault");
+        assertEq(version, "1");
+        assertEq(chainId, block.chainid);
+        assertEq(verifyingContract, address(vault));
+    }
+
+    function test_hashVerificationReceipt_isTheStandardEip712Digest() public view {
+        CommitmentVault.VerificationReceipt memory receipt = CommitmentVault.VerificationReceipt({
+            commitmentId: 7,
+            goalId: 3,
+            milestoneRef: MILESTONE_REF,
+            confidence: 92,
+            evidenceHash: EVIDENCE_HASH,
+            verificationHash: VERIF_HASH,
+            modelVersionHash: MODEL_VERSION_HASH,
+            deadline: 1_800_000_000
+        });
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256("CommitAI CommitmentVault"),
+                keccak256("1"),
+                block.chainid,
+                address(vault)
+            )
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "VerificationReceipt(uint256 commitmentId,uint256 goalId,bytes32 milestoneRef,uint16 confidence,bytes32 evidenceHash,bytes32 verificationHash,bytes32 modelVersionHash,uint256 deadline)"
+                ),
+                uint256(7),
+                uint256(3),
+                MILESTONE_REF,
+                uint16(92),
+                EVIDENCE_HASH,
+                VERIF_HASH,
+                MODEL_VERSION_HASH,
+                uint256(1_800_000_000)
+            )
+        );
+        assertEq(
+            vault.hashVerificationReceipt(receipt),
+            keccak256(abi.encodePacked(hex"1901", domainSeparator, structHash))
+        );
+    }
+
+    /// @dev Cross-language conformance fixture. The identical domain + receipt is hashed
+    ///      in `apps/web/lib/chain/receipt.test.ts` with viem and asserted against this
+    ///      same constant, so a drift in either implementation's type string, field order
+    ///      or domain fails a suite instead of mis-signing a real approval. Fixed vault
+    ///      address + chain id (968, BOT Chain testnet) so the digest is deterministic.
+    bytes32 internal constant FIXTURE_RECEIPT_DIGEST =
+        0xec7008deb512eb12f8c881413a14f989bad7409e0c4b25936c50c8b87927a437;
+
+    function test_receiptDigest_matchesTheCrossLanguageFixture() public view {
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256("CommitAI CommitmentVault"),
+                keccak256("1"),
+                uint256(968),
+                address(0x0076c4269bE298429af7827A2A5CC40A65F8F8a8)
+            )
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(
+                vault.VERIFICATION_RECEIPT_TYPEHASH(),
+                uint256(7),
+                uint256(3),
+                bytes32(
+                    uint256(0x1111111111111111111111111111111111111111111111111111111111111111)
+                ),
+                uint16(92),
+                bytes32(
+                    uint256(0x2222222222222222222222222222222222222222222222222222222222222222)
+                ),
+                bytes32(
+                        uint256(0x3333333333333333333333333333333333333333333333333333333333333333)
+                    ),
+                bytes32(
+                    uint256(0x4444444444444444444444444444444444444444444444444444444444444444)
+                ),
+                uint256(1_800_000_000)
+            )
+        );
+        assertEq(
+            keccak256(abi.encodePacked(hex"1901", domainSeparator, structHash)),
+            FIXTURE_RECEIPT_DIGEST
+        );
     }
 }

@@ -1,4 +1,4 @@
-import type { ChainTransaction } from "@prisma/client";
+import { ChainTxKind, type ChainTransaction } from "@prisma/client";
 import { prisma } from "../client";
 import { WalletScopeError } from "../errors";
 import {
@@ -108,4 +108,41 @@ export async function getChainTxByHash(
   const addr = evmAddressSchema.parse(walletAddress);
   const hash = txHashSchema.parse(txHash);
   return prisma.chainTransaction.findFirst({ where: { txHash: hash, walletAddress: addr } });
+}
+
+/**
+ * Whether this wallet has really locked the principal for a commitment — true iff a
+ * `LOCK_FUNDS` transaction is indexed for it. This is the honest "locked" signal
+ * (rule 1: it reflects a real broadcast receipt), NOT the commitment's DB status,
+ * which stays `CREATED` after a lock (the on-chain id is back-filled without flipping
+ * status — see `setOnchainCommitmentId`). Wallet-scoped, so it never observes another
+ * wallet's locks. Used by the commitment detail view to gate the Lock button.
+ */
+export async function isCommitmentLocked(
+  walletAddress: string,
+  commitmentId: string,
+): Promise<boolean> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  const row = await prisma.chainTransaction.findFirst({
+    where: { walletAddress: addr, commitmentId, kind: ChainTxKind.LOCK_FUNDS },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/**
+ * The set of this wallet's commitment ids that have an indexed `LOCK_FUNDS`
+ * transaction. One grouped query for the list view, so surfacing the locked state
+ * across many commitments costs a single round-trip rather than a query per
+ * commitment (no new N+1 — `distinct` collapses re-recorded hashes for the same
+ * commitment). Wallet-scoped like every read here.
+ */
+export async function listLockedCommitmentIds(walletAddress: string): Promise<Set<string>> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  const rows = await prisma.chainTransaction.findMany({
+    where: { walletAddress: addr, kind: ChainTxKind.LOCK_FUNDS, commitmentId: { not: null } },
+    select: { commitmentId: true },
+    distinct: ["commitmentId"],
+  });
+  return new Set(rows.map((r) => r.commitmentId as string));
 }

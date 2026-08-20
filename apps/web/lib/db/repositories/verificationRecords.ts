@@ -7,6 +7,7 @@ import {
   evmAddressSchema,
   type CreateVerificationRecordInput,
 } from "../schemas";
+import { groupByKey } from "./grouping";
 
 /**
  * Wallet-scoped verification-record access (§6).
@@ -82,6 +83,42 @@ export async function listVerificationRecords(
   const addr = evmAddressSchema.parse(walletAddress);
   return prisma.verificationRecord.findMany({
     where: { goalId, walletAddress: addr },
+    orderBy: { submittedAt: "desc" },
+  });
+}
+
+/**
+ * Verification records for a SET of goals this wallet owns, grouped by goalId —
+ * ONE query, not one per goal (build-prompt §16 / item 6 N+1 fix). Each goal's
+ * list stays newest-first like `listVerificationRecords`, so the loader's
+ * "first-seen-per-milestone is the latest" grouping still holds. Wallet-scoped by
+ * `walletAddress`; an empty id list short-circuits with no query; a goal with no
+ * records is absent from the map (caller defaults to `[]`).
+ */
+export async function listVerificationRecordsForGoals(
+  walletAddress: string,
+  goalIds: readonly string[],
+): Promise<Map<string, VerificationRecord[]>> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  if (goalIds.length === 0) return new Map();
+  const rows = await prisma.verificationRecord.findMany({
+    where: { goalId: { in: [...goalIds] }, walletAddress: addr },
+    orderBy: { submittedAt: "desc" },
+  });
+  return groupByKey(rows, (v) => v.goalId);
+}
+
+/**
+ * Every verification record for this wallet, across all its goals, newest first
+ * (empty if none). Wallet-scoped — a caller only ever sees its own records. Used
+ * to derive achievement counts (verified milestones) for the wallet profile.
+ */
+export async function listWalletVerifications(
+  walletAddress: string,
+): Promise<VerificationRecord[]> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  return prisma.verificationRecord.findMany({
+    where: { walletAddress: addr },
     orderBy: { submittedAt: "desc" },
   });
 }

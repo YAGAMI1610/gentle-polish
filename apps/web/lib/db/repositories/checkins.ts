@@ -58,3 +58,16 @@ export async function listCheckIns(walletAddress: string, goalId: string): Promi
     orderBy: { createdAt: "desc" },
   });
 }
+
+/**
+ * Every check-in this wallet has logged, across all its goals, newest first
+ * (empty if none). Wallet-scoped like the rest — a caller only ever sees its own
+ * check-ins. Used to derive the accountability profile's check-in streak (§10).
+ */
+export async function listWalletCheckIns(walletAddress: string): Promise<CheckIn[]> {
+  const addr = evmAddressSchema.parse(walletAddress);
+  return prisma.checkIn.findMany({
+    where: { walletAddress: addr },
+    orderBy: { createdAt: "desc" },
+  });
+}

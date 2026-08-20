@@ -1,9 +1,13 @@
 {
   "name": "web",
+  "version": "0.1.0",
   "private": true,
+  "bin": {
+    "commitai": "bin/commitai.mjs"
+  },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
@@ -11,6 +15,7 @@
     "test:watch": "vitest",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
+    "cli": "tsx cli/main.ts",
     "format": "prettier --write . --ignore-path ../../.prettierignore"
   },
   "dependencies": {
@@ -43,6 +48,7 @@
     "@radix-ui/react-toggle": "^1.1.10",
     "@radix-ui/react-toggle-group": "^1.1.11",
     "@radix-ui/react-tooltip": "^1.2.8",
+    "@rainbow-me/rainbowkit": "^2.2.11",
     "@tanstack/react-query": "^5.101.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -50,6 +56,7 @@
     "date-fns": "^4.1.0",
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
+    "iron-session": "^8.0.4",
     "lucide-react": "^0.575.0",
     "next": "^16.3.1",
     "react": "^19.2.0",
@@ -58,10 +65,13 @@
     "react-hook-form": "^7.71.2",
     "react-resizable-panels": "^4.6.5",
     "recharts": "^2.15.4",
+    "siwe": "^3.0.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
+    "tsx": "^4.23.12",
     "vaul": "^1.1.2",
     "viem": "^2.55.18",
+    "wagmi": "^2.19.5",
     "zod": "^3.24.2"
   },
   "devDependencies": {

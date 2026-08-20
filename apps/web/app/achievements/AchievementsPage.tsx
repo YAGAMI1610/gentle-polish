@@ -4,7 +4,6 @@ import { Flame, Lock } from "lucide-react";
 
 import { AchievementMedal, medalKind } from "@/components/commitai/AchievementMedal";
 import { AppShell } from "@/components/commitai/AppShell";
-import { DemoBadge } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -20,7 +19,6 @@ export default function AchievementsPage() {
         eyebrow="Achievements"
         title="Markers, not trophies"
         description="These exist to show the shape of your effort — they're not the point of the work."
-        action={<DemoBadge />}
       />
 
       <Card className="mb-6">
@@ -49,9 +47,9 @@ export default function AchievementsPage() {
                   {a.name}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{a.description}</p>
-                {a.earned && a.earnedAt ? (
+                {a.earned ? (
                   <p className="mt-1.5 text-xs font-medium text-verify">
-                    Earned {formatDate(a.earnedAt)}
+                    {a.earnedAt ? `Earned ${formatDate(a.earnedAt)}` : "Earned"}
                   </p>
                 ) : (
                   <p className="mt-1.5 inline-flex items-center gap-1 text-xs text-muted-foreground">

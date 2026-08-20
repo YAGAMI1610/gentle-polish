@@ -9,3 +9,5 @@ export * from "./verificationRecords";
 export * from "./commitments";
 export * from "./scores";
 export * from "./chainTx";
+export * from "./achievements";
+export * from "./connectors";

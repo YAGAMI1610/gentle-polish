@@ -7,7 +7,6 @@ import { useState } from "react";
 import { AppShell } from "@/components/commitai/AppShell";
 import { CategoryIcon, goalCategory } from "@/components/commitai/CategoryIcon";
 import { ConfidenceMeter } from "@/components/commitai/ConfidenceMeter";
-import { DemoBadge } from "@/components/commitai/DemoBadge";
 import { StatusChip, statusAccent } from "@/components/commitai/StatusChip";
 import { Timeline, TimelineItem } from "@/components/commitai/Timeline";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
+import { useSession } from "@/hooks/useSession";
 import {
   explorerUrl,
   formatDate,
@@ -84,13 +84,47 @@ function MilestoneRow({ milestone, last }: { milestone: Milestone; last: boolean
 }
 
 export default function GoalDetail({ goalId }: { goalId: string }) {
-  const { data: goal } = useGoal(goalId);
+  const { isConnected, isLoading: sessionLoading } = useSession();
+  const { data: goal, isLoading } = useGoal(goalId);
   const { data: commitment } = useCommitment(goal?.commitmentId);
+
+  if (!isConnected && !sessionLoading) {
+    return (
+      <AppShell>
+        <Button asChild variant="ghost" size="sm" className="-ml-2 mb-3 gap-1">
+          <Link href="/goals">
+            <ChevronLeft className="size-4" /> All goals
+          </Link>
+        </Button>
+        <div className="rounded-2xl border border-dashed border-border p-10 text-center">
+          <p className="text-sm text-muted-foreground">Connect your wallet to view this goal.</p>
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (sessionLoading || isLoading) {
+    return (
+      <AppShell>
+        <p className="text-sm text-muted-foreground">Loading goal…</p>
+      </AppShell>
+    );
+  }
 
   if (!goal) {
     return (
       <AppShell>
-        <p className="text-sm text-muted-foreground">Loading goal…</p>
+        <Button asChild variant="ghost" size="sm" className="-ml-2 mb-3 gap-1">
+          <Link href="/goals">
+            <ChevronLeft className="size-4" /> All goals
+          </Link>
+        </Button>
+        <div className="rounded-2xl border border-dashed border-border p-10 text-center">
+          <h2 className="text-lg">Goal not found</h2>
+          <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
+            This goal doesn't exist, or it isn't associated with your connected wallet.
+          </p>
+        </div>
       </AppShell>
     );
   }
@@ -117,7 +151,6 @@ export default function GoalDetail({ goalId }: { goalId: string }) {
             >
               {goal.mode === "self-commitment" ? "Self-commitment" : "Accountability only"}
             </Badge>
-            <DemoBadge />
           </div>
           <h1 className="mt-2 text-2xl leading-tight sm:text-3xl">{goal.title}</h1>
           <p className="mt-2 text-sm text-muted-foreground">{goal.summary}</p>
@@ -181,7 +214,6 @@ export default function GoalDetail({ goalId }: { goalId: string }) {
               </span>
               On-chain commitment terms
             </CardTitle>
-            <DemoBadge />
           </CardHeader>
           <CardContent className="text-sm">
             <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
@@ -212,18 +244,23 @@ export default function GoalDetail({ goalId }: { goalId: string }) {
               <span className="font-medium text-foreground">If it doesn't happen: </span>
               {commitment.failurePath}
             </p>
-            <a
-              href={explorerUrl(commitment.txHash)}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-4 inline-flex items-center gap-2 rounded-lg border border-chain/30 bg-background/70 px-3 py-2 text-xs font-medium text-chain transition-colors hover:bg-background"
-            >
-              <ExternalLink className="size-3.5" aria-hidden />
-              <span className="font-mono">{formatTxHash(commitment.txHash)}</span>
-              <span className="font-normal text-muted-foreground">
-                on the explorer (placeholder)
-              </span>
-            </a>
+            {commitment.txHash ? (
+              <a
+                href={explorerUrl(commitment.txHash)}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-4 inline-flex items-center gap-2 rounded-lg border border-chain/30 bg-background/70 px-3 py-2 text-xs font-medium text-chain transition-colors hover:bg-background"
+              >
+                <ExternalLink className="size-3.5" aria-hidden />
+                <span className="font-mono">{formatTxHash(commitment.txHash)}</span>
+                <span className="font-normal text-muted-foreground">on the explorer</span>
+              </a>
+            ) : (
+              <p className="mt-4 text-xs text-muted-foreground">
+                Not yet locked on-chain — the transaction link appears once the funds are signed and
+                locked.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}

@@ -5,11 +5,11 @@ import { Copy, Wallet } from "lucide-react";
 import { AppShell } from "@/components/commitai/AppShell";
 import { ProgressRing } from "@/components/commitai/ProgressRing";
 import { ConnectWalletDialog } from "@/components/commitai/ConnectWalletDialog";
-import { DemoBadge } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { useSession } from "@/hooks/useSession";
 import {
   explorerUrl,
   formatAddress,
@@ -20,8 +20,28 @@ import {
 } from "@/hooks/useCommitAI";
 
 export default function ProfilePage() {
+  const { isConnected, isLoading: sessionLoading } = useSession();
   const { data: profile } = useWalletProfile();
   const { data: commitments = [] } = useCommitments();
+
+  if (!isConnected && !sessionLoading) {
+    return (
+      <AppShell>
+        <PageHeader eyebrow="Profile" title="Your record" />
+        <Card className="border-chain/40">
+          <CardContent className="flex flex-col items-center gap-4 py-10 text-center">
+            <div className="flex size-12 items-center justify-center rounded-full bg-chain-soft text-chain">
+              <Wallet className="size-6" />
+            </div>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              Connect your wallet to see your accountability score, goals and commitment history.
+            </p>
+            <ConnectWalletDialog />
+          </CardContent>
+        </Card>
+      </AppShell>
+    );
+  }
 
   if (!profile) {
     return (
@@ -33,7 +53,7 @@ export default function ProfilePage() {
 
   return (
     <AppShell>
-      <PageHeader eyebrow="Profile" title="Your record" action={<DemoBadge />} />
+      <PageHeader eyebrow="Profile" title="Your record" />
 
       <Card className="mb-5 border-chain/40">
         <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
@@ -51,6 +71,9 @@ export default function ProfilePage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(profile.address);
+              }}
               className="rounded-lg p-2 text-muted-foreground hover:bg-accent"
               aria-label="Copy address"
             >
@@ -118,14 +141,18 @@ export default function ProfilePage() {
               <div>
                 <p className="text-sm font-medium">{c.goalTitle}</p>
                 <p className="text-xs text-muted-foreground">Opened {formatDate(c.createdAt)}</p>
-                <a
-                  href={explorerUrl(c.txHash)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-xs text-chain underline underline-offset-4"
-                >
-                  {formatTxHash(c.txHash)}
-                </a>
+                {c.txHash ? (
+                  <a
+                    href={explorerUrl(c.txHash)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-chain underline underline-offset-4"
+                  >
+                    {formatTxHash(c.txHash)}
+                  </a>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Not yet locked on-chain</p>
+                )}
               </div>
               <div className="text-right">
                 <p className="text-sm text-chain">

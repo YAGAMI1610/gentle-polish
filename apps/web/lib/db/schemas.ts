@@ -308,6 +308,19 @@ export const storeEvidenceInput = z.object({
 });
 export type StoreEvidenceInput = z.input<typeof storeEvidenceInput>;
 
+/**
+ * Request body for importing a connected source's activity as evidence
+ * (LIMITATIONS item 8). `goalId` says which goal the imported evidence attaches
+ * to; `since` (ISO) optionally bounds the activity window. The bytes/text come
+ * from the connector, not the client — the client only names the target.
+ */
+export const githubImportInput = z.object({
+  goalId: idSchema,
+  checkInId: idSchema.optional(),
+  since: z.string().datetime().optional(),
+});
+export type GithubImportInput = z.input<typeof githubImportInput>;
+
 // ===========================================================================
 // Build step 8 — chain-tx indexer
 // ===========================================================================

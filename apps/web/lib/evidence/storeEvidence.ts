@@ -4,6 +4,8 @@ import { createEvidence, getEvidence } from "@/lib/db";
 import { storeEvidenceInput, type StoreEvidenceInput } from "@/lib/db/schemas";
 import type { EvidenceBlob, EvidenceStorage } from "@/lib/storage";
 import { getEvidenceStorage } from "@/lib/storage";
+import { hardenEvidenceBytes } from "./hardening";
+import type { EvidenceHardeningReport, MalwareScanner } from "./hardening";
 
 /**
  * Evidence upload/storage pipeline (build sequence §14.7).
@@ -26,13 +28,33 @@ import { getEvidenceStorage } from "@/lib/storage";
 export const MAX_EVIDENCE_BYTES = 15 * 1024 * 1024;
 
 /** MIME allowlist for binary evidence. Unknown/none is treated as opaque bytes;
- *  clearly-executable types are refused. Deep content-sniffing/AV is deferred
- *  hardening (LIMITATIONS step 7). */
+ *  clearly-executable types are refused. The declared type is only the FIRST gate —
+ *  `hardening/` then sniffs the real bytes, scans them, and strips metadata
+ *  (LIMITATIONS §13, item 10). */
 const ALLOWED_MIME_PREFIXES = ["image/", "text/"] as const;
 const ALLOWED_MIME_EXACT = new Set([
   "application/pdf",
   "application/json",
   "application/octet-stream",
+]);
+
+/**
+ * Active-content types refused despite matching an allowed prefix. `text/html` and
+ * `image/svg+xml` are scriptable: served from our own origin they are stored-XSS
+ * vectors (the `[id]` route also forces `attachment` + `nosniff` — defence in depth,
+ * and this closes the deliberate gap recorded in LIMITATIONS §22.3).
+ */
+const DENIED_ACTIVE_MIMES = new Set([
+  "text/html",
+  "text/xml",
+  "text/javascript",
+  "text/x-shellscript",
+  "image/svg+xml",
+  "application/xhtml+xml",
+  "application/xml",
+  "application/javascript",
+  "application/ecmascript",
+  "application/x-httpd-php",
 ]);
 
 export interface StoreEvidenceArgs extends StoreEvidenceInput {
@@ -47,10 +69,21 @@ export interface StoreEvidenceArgs extends StoreEvidenceInput {
  * `storageKey` + `contentHash`. Otherwise `contentText` is required → hashed
  * (sha256) and kept off-chain in the row. Exactly one payload kind must be present.
  */
+export interface StoreEvidenceOptions {
+  /**
+   * Malware scanner for the hardening pass. Omit to use the configured one
+   * (`EVIDENCE_MALWARE_SCAN`); pass `null` to skip scanning explicitly.
+   */
+  readonly scanner?: MalwareScanner | null;
+  /** Optional sink for the hardening report (what was sniffed/removed/scanned). */
+  readonly onHardened?: (report: EvidenceHardeningReport) => void;
+}
+
 export async function storeEvidence(
   walletAddress: string,
   args: StoreEvidenceArgs,
   storage: EvidenceStorage = getEvidenceStorage(),
+  options: StoreEvidenceOptions = {},
 ): Promise<Evidence> {
   const meta = storeEvidenceInput.parse(args);
   const hasBytes = args.bytes !== undefined && args.bytes.byteLength > 0;
@@ -69,10 +102,27 @@ export async function storeEvidence(
     }
     assertAllowedMime(meta.mimeType);
 
+    // Content hardening (§13, item 10) BEFORE hashing or storing: sniff the real
+    // bytes and hold the declared type to them, malware-scan the original, then
+    // strip EXIF/metadata. What comes back is what gets hashed and stored, so
+    // `contentHash` describes exactly the bytes in the blob store.
+    const hardened = await hardenEvidenceBytes(
+      {
+        bytes,
+        ...(meta.mimeType !== undefined ? { mimeType: meta.mimeType } : {}),
+        ...(meta.fileName !== undefined ? { fileName: meta.fileName } : {}),
+      },
+      options.scanner === undefined ? {} : { scanner: options.scanner },
+    );
+    // The corroborated type must clear the same allowlist as the declared one.
+    assertAllowedMime(hardened.mimeType);
+    options.onHardened?.(hardened.report);
+
+    const effectiveMime = hardened.mimeType;
     const stored = await storage.put({
       walletAddress,
-      bytes,
-      ...(meta.mimeType !== undefined ? { mimeType: meta.mimeType } : {}),
+      bytes: hardened.bytes,
+      ...(effectiveMime !== undefined ? { mimeType: effectiveMime } : {}),
       ...(meta.fileName !== undefined ? { fileName: meta.fileName } : {}),
     });
 
@@ -82,7 +132,7 @@ export async function storeEvidence(
       storageKey: stored.storageKey,
       contentHash: stored.contentHash,
       sizeBytes: stored.sizeBytes,
-      ...(meta.mimeType !== undefined ? { mimeType: meta.mimeType } : {}),
+      ...(effectiveMime !== undefined ? { mimeType: effectiveMime } : {}),
       ...(meta.fileName !== undefined ? { fileName: meta.fileName } : {}),
       ...(meta.checkInId !== undefined ? { checkInId: meta.checkInId } : {}),
     });
@@ -119,9 +169,21 @@ export async function readEvidenceBlob(
 }
 
 function assertAllowedMime(mimeType: string | undefined): void {
-  if (mimeType === undefined) return; // opaque bytes are allowed
-  const mt = mimeType.toLowerCase();
-  if (ALLOWED_MIME_EXACT.has(mt)) return;
-  if (ALLOWED_MIME_PREFIXES.some((p) => mt.startsWith(p))) return;
-  throw new Error(`evidence MIME type not allowed: ${mimeType}`);
+  if (!isAllowedEvidenceMime(mimeType)) {
+    throw new Error(`evidence MIME type not allowed: ${mimeType}`);
+  }
+}
+
+/**
+ * True when a MIME type is acceptable for binary evidence (undefined = opaque
+ * bytes, allowed). Exported so the HTTP upload boundary can reject a disallowed
+ * type with a 415 BEFORE calling `storeEvidence`, reusing this one allowlist
+ * instead of duplicating it. `storeEvidence` still enforces it internally.
+ */
+export function isAllowedEvidenceMime(mimeType: string | undefined): boolean {
+  if (mimeType === undefined) return true; // opaque bytes are allowed
+  const mt = mimeType.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (DENIED_ACTIVE_MIMES.has(mt)) return false;
+  if (ALLOWED_MIME_EXACT.has(mt)) return true;
+  return ALLOWED_MIME_PREFIXES.some((p) => mt.startsWith(p));
 }

@@ -1,172 +1,258 @@
 "use client";
 
-import { CalendarDays, Send, Target } from "lucide-react";
+import { Send, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import type { FormEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { AppShell } from "@/components/commitai/AppShell";
-import { AgentBubble, ChatThread, UserBubble } from "@/components/commitai/Chat";
-import { DemoBadge, UiOnlyNote } from "@/components/commitai/DemoBadge";
+import { ChatThread } from "@/components/commitai/Chat";
+import { ChatTranscript } from "@/components/commitai/ChatTranscript";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { ApiError } from "@/lib/api/client";
+import type { AIMessage } from "@/lib/ai/provider";
+import type { CreateGoalRequest } from "@/lib/api/dto";
+import { useAiTurn, useCreateGoal } from "@/hooks/useCommitAI";
+import { useSession } from "@/hooks/useSession";
 
-function Composer({ placeholder }: { placeholder: string }) {
-  const [value, setValue] = useState("");
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        setValue("");
-      }}
-      className="sticky bottom-20 mt-6 flex gap-2 rounded-2xl border border-border bg-card p-2 shadow-soft lg:bottom-4"
-    >
-      <Input
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder={placeholder}
-        className="border-0 bg-transparent shadow-none focus-visible:ring-0"
-      />
-      <Button type="submit" size="icon" aria-label="Send message">
-        <Send className="size-4" />
-      </Button>
-    </form>
-  );
-}
+const GOAL_MODES: { value: CreateGoalRequest["mode"]; label: string; detail: string }[] = [
+  {
+    value: "ACCOUNTABILITY",
+    label: "Accountability",
+    detail: "You want the agent to hold you to it",
+  },
+  {
+    value: "SELF_COMMITMENT",
+    label: "Self-commitment",
+    detail: "You'll back it with your own stake",
+  },
+];
 
 export default function CreateGoal() {
+  const { isConnected } = useSession();
+  const queryClient = useQueryClient();
+  const aiTurn = useAiTurn();
+  const createGoal = useCreateGoal();
+
+  const [messages, setMessages] = useState<AIMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [manualOpen, setManualOpen] = useState(false);
+
+  const [title, setTitle] = useState("");
+  const [summary, setSummary] = useState("");
+  const [mode, setMode] = useState<CreateGoalRequest["mode"]>("ACCOUNTABILITY");
+  const [frequency, setFrequency] = useState("Weekly");
+  const [createdId, setCreatedId] = useState<string | null>(null);
+
+  const aiUnavailable = aiTurn.error instanceof ApiError && aiTurn.error.status === 503;
+
+  async function send(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = input.trim();
+    if (!text || aiTurn.isPending) return;
+    setInput("");
+    const history = messages;
+    // Show the user's line immediately; the response replaces the transcript.
+    setMessages([...history, { kind: "user_text", text }]);
+    try {
+      const result = await aiTurn.mutateAsync({ userMessage: text, history });
+      setMessages(result.messages);
+      // A turn may have created a goal / milestones / strategy via tools.
+      void queryClient.invalidateQueries({ queryKey: ["goals"] });
+      void queryClient.invalidateQueries({ queryKey: ["activity"] });
+    } catch {
+      // Error is surfaced from aiTurn.error below; keep the user's message visible.
+    }
+  }
+
+  async function submitManual(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!title.trim() || !summary.trim() || !frequency.trim()) return;
+    try {
+      const goal = await createGoal.mutateAsync({
+        title: title.trim(),
+        summary: summary.trim(),
+        mode,
+        checkInFrequency: frequency.trim(),
+      });
+      setCreatedId(goal.id);
+      setTitle("");
+      setSummary("");
+    } catch {
+      // Surfaced from createGoal.error below.
+    }
+  }
+
   return (
     <AppShell>
-      <div className="mb-5 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
-            New goal
-          </p>
-          <h1 className="mt-1 text-2xl leading-tight">Let's make this specific</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            A few questions, one at a time. Vague goals can't be verified — that's the whole point.
-          </p>
-        </div>
-        <DemoBadge />
+      <div className="mb-5">
+        <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+          New goal
+        </p>
+        <h1 className="mt-1 text-2xl leading-tight">Let&apos;s make this specific</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          A few questions, one at a time. Vague goals can&apos;t be verified — that&apos;s the whole
+          point.
+        </p>
       </div>
 
-      <Tabs defaultValue="conversation">
-        <TabsList className="w-full">
-          <TabsTrigger value="conversation" className="flex-1">
-            Conversation
-          </TabsTrigger>
-          <TabsTrigger value="pushback" className="flex-1">
-            When the agent pushes back
-          </TabsTrigger>
-        </TabsList>
+      {!isConnected && (
+        <Card className="mb-5 border-caution/40 bg-caution-soft">
+          <CardContent className="py-4 text-sm">
+            Connect your wallet to start a goal — the conversation and your goals are tied to your
+            signed-in wallet.
+          </CardContent>
+        </Card>
+      )}
 
-        <TabsContent value="conversation" className="mt-5">
-          <ChatThread>
-            <AgentBubble>What do you want to get done? Plain words are fine.</AgentBubble>
-            <UserBubble>I want to read more.</UserBubble>
-            <AgentBubble>
-              Good starting point. Where are you now — roughly how many books in the last year?
-            </AgentBubble>
-            <UserBubble>Maybe four.</UserBubble>
-            <AgentBubble>
-              And what would feel like a real step up without wrecking your week?
-            </AgentBubble>
-            <UserBubble>Twelve this year. One a month.</UserBubble>
-            <AgentBubble>Is there a hard deadline, or is this ongoing?</AgentBubble>
-            <UserBubble>End of the year.</UserBubble>
-            <AgentBubble>
-              How often should I check in? Weekly tends to work best for reading.
-            </AgentBubble>
-            <UserBubble>Weekly is fine.</UserBubble>
-            <AgentBubble>
-              Here's what I've written down. Change anything that isn't right.
-            </AgentBubble>
-          </ChatThread>
+      <ChatThread>
+        {messages.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Tell your agent what you want to get done, in plain words. It&apos;ll ask a few
+            questions to make the goal specific enough to verify.
+          </p>
+        ) : (
+          <ChatTranscript messages={messages} />
+        )}
+        {aiTurn.isPending && (
+          <p className="text-center text-xs italic text-muted-foreground">Thinking…</p>
+        )}
+      </ChatThread>
 
-          <Card className="mt-5">
-            <CardHeader className="flex-row items-center justify-between gap-2 pb-2">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Target className="size-4" /> Read 12 books this year
-              </CardTitle>
-              <DemoBadge />
+      {aiTurn.isError && (
+        <p className="mt-4 rounded-lg border border-caution/40 bg-caution-soft px-3 py-2 text-xs leading-relaxed">
+          {aiUnavailable
+            ? "The AI isn't configured on this server yet (no GEMINI_API_KEY). You can still create a goal with the form below."
+            : `Couldn't reach your agent: ${aiTurn.error?.message ?? "unknown error"}`}
+        </p>
+      )}
+
+      <form
+        onSubmit={send}
+        className="sticky bottom-20 mt-6 flex gap-2 rounded-2xl border border-border bg-card p-2 shadow-soft lg:bottom-4"
+      >
+        <Input
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          placeholder={isConnected ? "Reply to your agent…" : "Connect your wallet first"}
+          disabled={!isConnected || aiTurn.isPending}
+          className="border-0 bg-transparent shadow-none focus-visible:ring-0"
+        />
+        <Button
+          type="submit"
+          size="icon"
+          aria-label="Send message"
+          disabled={!isConnected || aiTurn.isPending || input.trim().length === 0}
+        >
+          <Send className="size-4" />
+        </Button>
+      </form>
+
+      <section className="mt-8">
+        <Button variant="outline" className="gap-2" onClick={() => setManualOpen((open) => !open)}>
+          <Sparkles className="size-4" />{" "}
+          {manualOpen ? "Hide the form" : "Prefer a form? Create a goal directly"}
+        </Button>
+
+        {manualOpen && (
+          <Card className="mt-4">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Create a goal directly</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4 text-sm">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                  Milestones
-                </p>
-                <ul className="mt-2 space-y-1 text-muted-foreground">
-                  <li>Books 1-3 by 31 March</li>
-                  <li>Books 4-6 by 30 June</li>
-                  <li>Books 7-9 by 30 September</li>
-                  <li>Books 10-12 by 31 December</li>
-                </ul>
-              </div>
-              <div className="flex flex-wrap gap-6">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                    Deadline
-                  </p>
-                  <p className="mt-1 flex items-center gap-1.5">
-                    <CalendarDays className="size-4" /> 31 December 2026
-                  </p>
+            <CardContent>
+              {createdId ? (
+                <div className="space-y-3 text-sm">
+                  <p>Your goal was created.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button asChild size="sm">
+                      <Link href={`/goals/${createdId}`}>Open the goal</Link>
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setCreatedId(null)}>
+                      Create another
+                    </Button>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                    Check-ins
-                  </p>
-                  <p className="mt-1">Weekly, Wednesdays</p>
-                </div>
-              </div>
-              <div>
-                <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                  How I'll verify it
-                </p>
-                <ul className="mt-2 space-y-1 text-muted-foreground">
-                  <li>A short reflection on what you read</li>
-                  <li>Follow-up questions only a reader could answer</li>
-                  <li>Optionally, a photo of the book or e-reader progress</li>
-                </ul>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button asChild>
-                  <Link href="/goals">Save this goal</Link>
-                </Button>
-                <Button variant="outline">Keep editing</Button>
-              </div>
-              <UiOnlyNote>
-                Saving is not wired up yet — this screen shows the flow only. No goal is created.
-              </UiOnlyNote>
+              ) : (
+                <form onSubmit={submitManual} className="space-y-4">
+                  <div>
+                    <Label htmlFor="goal-title">Goal</Label>
+                    <Input
+                      id="goal-title"
+                      value={title}
+                      onChange={(event) => setTitle(event.target.value)}
+                      placeholder="Read 12 books this year"
+                      maxLength={200}
+                      className="mt-2"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="goal-summary">
+                      In a sentence, what does success look like?
+                    </Label>
+                    <Textarea
+                      id="goal-summary"
+                      value={summary}
+                      onChange={(event) => setSummary(event.target.value)}
+                      rows={3}
+                      placeholder="One book a month, with a short reflection on each."
+                      maxLength={2000}
+                      className="mt-2"
+                    />
+                  </div>
+                  <div>
+                    <Label>Mode</Label>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {GOAL_MODES.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setMode(option.value)}
+                          className={`rounded-xl border p-3 text-left text-sm transition-colors ${
+                            mode === option.value
+                              ? "border-primary bg-primary/5"
+                              : "border-border hover:border-primary/40"
+                          }`}
+                        >
+                          <span className="font-medium">{option.label}</span>
+                          <span className="mt-0.5 block text-xs text-muted-foreground">
+                            {option.detail}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <Label htmlFor="goal-frequency">Check-in cadence</Label>
+                    <Input
+                      id="goal-frequency"
+                      value={frequency}
+                      onChange={(event) => setFrequency(event.target.value)}
+                      placeholder="Weekly"
+                      maxLength={100}
+                      className="mt-2"
+                    />
+                  </div>
+                  {createGoal.isError && (
+                    <p className="text-xs text-destructive">
+                      {createGoal.error instanceof ApiError && createGoal.error.status === 401
+                        ? "Connect your wallet to create a goal."
+                        : `Couldn't create the goal: ${createGoal.error?.message ?? "unknown error"}`}
+                    </p>
+                  )}
+                  <Button type="submit" disabled={!isConnected || createGoal.isPending}>
+                    {createGoal.isPending ? "Creating…" : "Create goal"}
+                  </Button>
+                </form>
+              )}
             </CardContent>
           </Card>
-
-          <Composer placeholder="Reply to your agent…" />
-        </TabsContent>
-
-        <TabsContent value="pushback" className="mt-5">
-          <ChatThread>
-            <UserBubble>I want to run a marathon in six weeks. I don't run right now.</UserBubble>
-            <AgentBubble tone="caution">
-              That's a big jump in a short time — let's talk about it. Going from no running to 42km
-              in six weeks usually ends in injury rather than a finish line. I'm not saying no; I
-              want the goal to be one you can actually clear.
-            </AgentBubble>
-            <AgentBubble>
-              Two options: keep six weeks and aim for a 10K, or keep the marathon and give it five
-              to six months. Is there a date you're tied to?
-            </AgentBubble>
-            <UserBubble>
-              There's a race I want to do with a friend, but there's a 10K on the day too.
-            </UserBubble>
-            <AgentBubble>
-              Then the 10K in six weeks is the honest version, and we can set the marathon as a
-              follow-on goal for spring. Want me to write it up that way?
-            </AgentBubble>
-          </ChatThread>
-          <Composer placeholder="Tell the agent what you'd rather do…" />
-        </TabsContent>
-      </Tabs>
+        )}
+      </section>
     </AppShell>
   );
 }

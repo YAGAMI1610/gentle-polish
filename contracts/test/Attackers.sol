@@ -118,3 +118,32 @@ contract RejectingReceiver {
         revert("no ETH");
     }
 }
+
+/// @notice A reward funder that can toggle whether it accepts ETH. Used to prove the
+///         cancel-refund escrow fallback: it rejects the push during `cancelCommitment`
+///         (so its refund is escrowed and the depositor's principal still goes out),
+///         then accepts and pulls the escrow via `withdrawEscrow`.
+contract TogglingReceiver {
+    CommitmentVault public immutable vault;
+    bool public accept;
+
+    constructor(CommitmentVault _vault) {
+        vault = _vault;
+    }
+
+    function setAccept(bool a) external {
+        accept = a;
+    }
+
+    function fundReward(uint256 id, uint256 amount) external {
+        vault.fundReward{value: amount}(id);
+    }
+
+    function withdrawEscrow() external {
+        vault.withdrawEscrow();
+    }
+
+    receive() external payable {
+        if (!accept) revert("no ETH");
+    }
+}

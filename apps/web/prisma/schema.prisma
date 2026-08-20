@@ -127,6 +127,12 @@ enum ChainTxKind {
   CANCEL_COMMITMENT
 }
 
+/// Third-party evidence connectors a wallet can link (LIMITATIONS item 8).
+/// Currently GitHub only; the enum is the extension seam for fitness/reading etc.
+enum ConnectorProvider {
+  GITHUB
+}
+
 // ===========================================================================
 // Models
 // ===========================================================================
@@ -147,6 +153,8 @@ model Wallet {
   scoreLogs           AccountabilityScoreLog[]
   decisionLogs        DecisionLog[]
   chainTxs            ChainTransaction[]
+  earnedAchievements  EarnedAchievement[]
+  connectors          EvidenceConnector[]
 }
 
 /// A user goal. Maps to demo-data.ts `Goal`. `goalHash`/`onchainGoalId` are null
@@ -446,4 +454,72 @@ model ChainTransaction {
   @@unique([txHash])
   @@index([walletAddress, createdAt])
   @@index([commitmentId])
+}
+
+/// Catalog of achievement DEFINITIONS (build item 7). One row per achievement,
+/// mirrored from the `ACHIEVEMENT_CATALOG` code constant
+/// (`lib/achievements/catalog.ts`) by `syncAchievementCatalog`, which stays the
+/// source of truth for the earn PREDICATE. `metric`/`threshold` document the rule
+/// (`metric >= threshold`); the app evaluates it against real per-wallet counts and
+/// NEVER stores a per-user `earned` flag here (CLAUDE.md rule 1). Persisting the
+/// catalog gives earned rows referential integrity and makes the metadata queryable.
+model AchievementDefinition {
+  id          String @id // stable slug, e.g. "first-check-in"
+  name        String
+  description String
+  metric      String // which AchievementCounts field, e.g. "checkIns"
+  threshold   Int // count at/above which it is earned
+  sortOrder   Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  earnedBy EarnedAchievement[]
+}
+
+/// Persisted earned-at crossing (build item 7). A row is written the FIRST time the
+/// system observes a wallet meeting an achievement's threshold; the unique
+/// (walletAddress, achievementId) + first-writer-wins insert (createMany
+/// skipDuplicates) means `earnedAt` is stable forever after — a genuine
+/// first-observation timestamp, never fabricated or moved (CLAUDE.md rule 1).
+/// `earned` itself is still recomputed live from real counts; this table only
+/// records WHEN the crossing was first seen.
+model EarnedAchievement {
+  id            String @id @default(cuid())
+  walletAddress String
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  achievementId String
+  achievement   AchievementDefinition @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  earnedAt DateTime @default(now())
+
+  @@unique([walletAddress, achievementId])
+  @@index([walletAddress])
+}
+
+/// A wallet's link to a third-party evidence source (LIMITATIONS item 8 — GitHub).
+///
+/// The OAuth access token is stored ENCRYPTED (`accessTokenEnc`, AES-256-GCM via
+/// lib/connectors/crypto) — never in plaintext, so a DB dump without the server
+/// secret cannot use it. The token grants only READ access to the user's own
+/// activity (scope `read:user`); it can never move funds (CLAUDE.md rules 2–3),
+/// and the imported activity is stored as an off-chain `Evidence(type: GITHUB)`
+/// row (hash-anchored only, like any other evidence). One connection per
+/// (wallet, provider); re-connecting replaces the token in place.
+model EvidenceConnector {
+  id            String @id @default(cuid())
+  walletAddress String
+  wallet        Wallet @relation(fields: [walletAddress], references: [address], onDelete: Cascade)
+
+  provider       ConnectorProvider
+  externalLogin  String // the linked account's login/handle (e.g. GitHub username)
+  accessTokenEnc String // AES-256-GCM encrypted OAuth token — NEVER stored plaintext
+  scope          String // granted OAuth scopes, for display + audit
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([walletAddress, provider])
+  @@index([walletAddress])
 }

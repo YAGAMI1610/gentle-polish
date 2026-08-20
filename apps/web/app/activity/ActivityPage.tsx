@@ -5,7 +5,6 @@ import { useState } from "react";
 
 import { AgentMark } from "@/components/commitai/AgentMark";
 import { AppShell } from "@/components/commitai/AppShell";
-import { DemoBadge } from "@/components/commitai/DemoBadge";
 import { PageHeader } from "@/components/commitai/PageHeader";
 import { Timeline, TimelineItem } from "@/components/commitai/Timeline";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -23,7 +22,6 @@ export default function ActivityPage() {
         eyebrow="Activity"
         title="Everything that happened"
         description="Agent decisions and on-chain events in one place, so nothing is hidden from you."
-        action={<DemoBadge />}
       />
 
       <Tabs value={filter} onValueChange={(v) => setFilter(v as typeof filter)} className="mb-5">

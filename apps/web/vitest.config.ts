@@ -12,7 +12,7 @@ export default defineConfig({
     // so every test imports { describe, it, expect } from "vitest" explicitly.
     globals: false,
     setupFiles: ["./vitest.setup.ts"],
-    include: ["lib/**/*.test.ts"],
+    include: ["lib/**/*.test.ts", "app/**/*.test.ts"],
   },
   resolve: {
     alias: [{ find: /^@\//, replacement: `${appDir}/` }],

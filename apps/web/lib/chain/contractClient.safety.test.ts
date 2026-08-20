@@ -21,7 +21,9 @@ import {
  *     contract functions — registerMilestone, requestCompletion, approveCompletion,
  *     setAttestor — and NONE of the fund-moving ones. There is literally no method on
  *     the object the backend key could call to transfer value. The object is frozen,
- *     so nothing can bolt one on at runtime.
+ *     so nothing can bolt one on at runtime. `approveCompletion` is additionally
+ *     two-of-two: the contract rejects it without a receipt signed by the distinct
+ *     `aiVerifier` key (invariant I7) — proved in `receipt.safety.test.ts`.
  *  2. Every fund-relevant action is a pure `prepare*` encoder that returns calldata
  *     for the DEPOSITOR's own wallet to sign — it never broadcasts and never needs a
  *     key. `createCommitment` / `claimReward` / `releasePrincipal` / `cancel` attach
@@ -66,6 +68,16 @@ describe("attestor client capability surface", () => {
 
   it("is frozen so no fund-moving method can be added at runtime", () => {
     expect(Object.isFrozen(client)).toBe(true);
+  });
+
+  it("cannot approve a completion on its own — the receipt is a required argument", () => {
+    // The signature is part of the call, so this key alone cannot write a confidence
+    // value; the AI-verifier key (a separate object, separate secret) must sign first.
+    const args = commitmentVaultAbi.find(
+      (i) => i.type === "function" && i.name === "approveCompletion",
+    ) as { inputs: readonly { name?: string; type: string }[] };
+    expect(args.inputs.map((i) => i.type)).toEqual(["tuple", "bytes"]);
+    expect(args.inputs[1]?.name).toBe("signature");
   });
 
   it("refuses to build without a key (honest error, never a fake)", () => {
