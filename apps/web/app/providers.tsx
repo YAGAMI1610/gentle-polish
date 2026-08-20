@@ -11,6 +11,7 @@ import {
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SiweMessage } from "siwe";
 import { useMemo, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import { WagmiProvider } from "wagmi";
 
 import { wagmiConfig } from "@/lib/wagmi/config";
@@ -57,28 +58,74 @@ function AuthProvider({ children }: { children: ReactNode }) {
     () =>
       createAuthenticationAdapter({
         getNonce: async () => {
-          const res = await fetch("/api/auth/nonce", { credentials: "include" });
-          if (!res.ok) throw new Error("failed to obtain sign-in nonce");
+          // getNonce + createMessage are RainbowKit's "Preparing message…" phase; a
+          // throw here surfaces only its generic "Error preparing message, please
+          // retry!". So log the real status/body/error and raise a specific toast
+          // before rethrowing, so the failure is actually diagnosable.
+          let res: Response;
+          try {
+            res = await fetch("/api/auth/nonce", { credentials: "include" });
+          } catch (err) {
+            console.error("[auth] nonce request failed (network error):", err);
+            toast.error("Couldn't reach the sign-in service", {
+              description: "Check your connection and try again.",
+            });
+            throw err instanceof Error ? err : new Error("nonce network error");
+          }
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            console.error(`[auth] nonce request failed: HTTP ${res.status}`, body);
+            toast.error("Couldn't start sign-in", {
+              description: `The sign-in service returned ${res.status}. Please try again.`,
+            });
+            throw new Error(`nonce request failed with status ${res.status}`);
+          }
           return res.text();
         },
-        createMessage: ({ nonce, address, chainId }) =>
-          new SiweMessage({
-            domain: window.location.host,
-            address,
-            statement: "Sign in to CommitAI to manage your goals and commitments.",
-            uri: window.location.origin,
-            version: "1",
-            chainId,
-            nonce,
-          }).prepareMessage(),
+        createMessage: ({ nonce, address, chainId }) => {
+          try {
+            return new SiweMessage({
+              domain: window.location.host,
+              address,
+              statement: "Sign in to CommitAI to manage your goals and commitments.",
+              uri: window.location.origin,
+              version: "1",
+              chainId,
+              nonce,
+            }).prepareMessage();
+          } catch (err) {
+            // prepareMessage() throws e.g. on a non-EIP-55 address or a malformed field.
+            console.error("[auth] failed to build the SIWE message:", err, { chainId });
+            toast.error("Couldn't prepare the sign-in message", {
+              description: "Your wallet returned an unexpected address or network.",
+            });
+            throw err;
+          }
+        },
         verify: async ({ message, signature }) => {
-          const res = await fetch("/api/auth/verify", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            credentials: "include",
-            body: JSON.stringify({ message, signature }),
-          });
-          if (!res.ok) return false;
+          let res: Response;
+          try {
+            res = await fetch("/api/auth/verify", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ message, signature }),
+            });
+          } catch (err) {
+            console.error("[auth] verify request failed (network error):", err);
+            toast.error("Couldn't verify your signature", {
+              description: "Check your connection and try again.",
+            });
+            return false;
+          }
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            console.error(`[auth] verify failed: HTTP ${res.status}`, body);
+            toast.error("Sign-in verification failed", {
+              description: `The server returned ${res.status}. Please try connecting again.`,
+            });
+            return false;
+          }
           await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
           return true;
         },

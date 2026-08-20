@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
 import { Providers } from "./providers";
+import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
 const DESCRIPTION =
@@ -45,6 +46,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       </head>
       <body>
         <Providers>{children}</Providers>
+        <Toaster />
       </body>
     </html>
   );

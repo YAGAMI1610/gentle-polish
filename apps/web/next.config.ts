@@ -25,6 +25,34 @@ const nextConfig: NextConfig = {
   // auto-loaded alongside them and dilute the non-negotiable rules there.
   agentRules: false,
 
+  // Security response headers on every route. These are the safe, high-value headers
+  // that don't risk breaking the wallet/RPC flow. Chief among them, for a dApp whose
+  // whole purpose is prompting wallet signatures: the anti-clickjacking pair, so a
+  // hostile page can't frame CommitAI and trick a user into signing over an overlay.
+  // Nothing legitimately embeds this app in a frame.
+  //
+  // A full script-src/connect-src Content-Security-Policy is deliberately NOT set here:
+  // the wallet stack (RainbowKit/WalletConnect) reaches a wss relay plus several RPC/CDN
+  // origins, and a wrong allowlist would silently break wallet connection — a worse bug
+  // than the gap it closes. Deferred and specified in LIMITATIONS.md §24.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          {
+            key: "Permissions-Policy",
+            value: "camera=(), microphone=(), geolocation=(), browsing-topics=()",
+          },
+        ],
+      },
+    ];
+  },
+
   // Turbopack builder (portability: this env falls back to --webpack, see below).
   turbopack: {
     resolveAlias: Object.fromEntries(X402_PEER_DEPS.map((mod) => [mod, X402_STUB_PATH] as const)),

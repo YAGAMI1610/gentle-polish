@@ -1759,3 +1759,113 @@ $ pnpm --filter web test
 (`lib/wagmi/config.ts`, `lib/wagmi/config.test.ts`) for `mock|fake|TODO: real|hardcoded`: every hit is the
 test's own mocking scaffolding (`vi.mock`/`vi.hoisted`, by design) or the code comment stating the injected
 fallback is explicitly _not_ a stub — no faked runtime behavior.
+
+## 24. Wallet sign-in debugging + response security headers (2026-08-20)
+
+Two things drove this section: a user report of **"Error preparing message, please retry!"** on the wallet
+connect flow, and a from-a-user-perspective audit of the live deploy (`https://commitai-bot.vercel.app`).
+
+### 24.1 "Error preparing message" — traced, and the local vs. deployed split
+
+"Preparing message…" / "Error preparing message, please retry!" is **RainbowKit-internal UI copy**, shown
+during its authentication adapter's `getNonce()` + `createMessage()` phase and on any throw inside it. It is
+not app text and cannot be re-worded — so the app can only (a) make the underlying failure diagnosable and
+(b) surface its own specific message alongside it.
+
+**Reconciling where it happens — real probes, not assumption:**
+
+- **Deployed app is healthy.** Read-only probes of the live deploy show the nonce path works:
+  ```
+  $ curl -s -o /dev/null -w '%{http_code}' https://commitai-bot.vercel.app/api/auth/nonce   →  200
+  $ curl -s https://commitai-bot.vercel.app/api/auth/nonce                                  →  B4yBogT8GEkP9SpXc  (valid 17-char nonce)
+  $ curl -s https://commitai-bot.vercel.app/api/auth/session                                →  {"address":null}
+  ```
+  So `SESSION_PASSWORD` **is** set in Vercel and the deployed nonce endpoint issues nonces correctly.
+- **Local dev reproduces the error.** `apps/web/.env` ships with `SESSION_PASSWORD=` **empty**. Empty/short
+  → `getSessionOptions()` throws (by design, §15 — no weak fallback) → the nonce route 500s → RainbowKit's
+  `getNonce()` throws → the generic "Error preparing message". This is the likely thing the user hit.
+  **User action (a secret, so not done for them):** set `SESSION_PASSWORD` to ≥32 chars in `apps/web/.env`,
+  e.g. `openssl rand -base64 32`. The value must not be committed; `.env` is gitignored.
+
+### 24.2 Fix — make the failure diagnosable and specific (no behavior faked)
+
+- **`app/api/auth/nonce/route.ts`** now wraps the handler in try/catch: on any throw it `console.error`s the
+  real cause server-side and returns a **handled JSON 500** (`{ error: "could not start sign-in — please try
+again" }`) instead of an unhandled throw — and it never leaks the `SESSION_PASSWORD` hint text to the
+  client. It also sets `cache-control: no-store` on the nonce (a single-use secret; the deploy previously
+  sent `public, max-age=0`).
+- **`app/providers.tsx`** — the RainbowKit adapter's `getNonce` / `createMessage` / `verify` each now log the
+  actual status + response body (or the network error) and raise a **specific `sonner` toast** before
+  rethrowing / returning false, so the user sees a concrete reason ("The sign-in service returned 500…")
+  next to RainbowKit's fixed copy. Rethrow is preserved so RainbowKit still shows its retry state.
+- **`app/layout.tsx`** now mounts `<Toaster />`. The `sonner` wrapper existed (`components/ui/sonner.tsx`)
+  but was **never rendered**, so `toast()` calls had nowhere to appear. This was a latent gap for any
+  toast-based UX, not just auth.
+
+Ruled out by tracing, not guesswork: **CORS** (the auth routes are same-origin; the middleware enforces it),
+and a **modal-opens-before-address race** (RainbowKit only calls `createMessage` after the wallet supplies a
+connected address). The `verify` cookie round-trip is a post-signature concern, not the "preparing" phase.
+
+### 24.3 Response security headers — live-audit finding, FIXED (with a deliberate CSP deferral)
+
+The live deploy returned **only** `strict-transport-security`; no anti-clickjacking, `nosniff`, referrer, or
+permissions headers. For a dApp whose entire purpose is prompting wallet signatures, the missing anti-frame
+headers are the important gap: a hostile page could frame CommitAI and trick a user into signing over an
+overlay. `next.config.ts` now sets, on every route:
+
+| Header                    | Value                                                          | Why                                                      |
+| ------------------------- | -------------------------------------------------------------- | -------------------------------------------------------- |
+| `X-Frame-Options`         | `DENY`                                                         | anti-clickjacking (nothing legitimately frames this app) |
+| `Content-Security-Policy` | `frame-ancestors 'none'`                                       | anti-clickjacking, modern form of the above              |
+| `X-Content-Type-Options`  | `nosniff`                                                      | stop MIME-sniffing of our responses                      |
+| `Referrer-Policy`         | `strict-origin-when-cross-origin`                              | don't leak full URLs (which can carry ids) cross-origin  |
+| `Permissions-Policy`      | `camera=(), microphone=(), geolocation=(), browsing-topics=()` | deny sensors the app never uses                          |
+
+**Deliberately NOT set (rule 6 — documented, not silently dropped):** a full `script-src`/`connect-src`/
+`style-src` Content-Security-Policy. The wallet stack (RainbowKit/WalletConnect) reaches a `wss` relay plus
+several RPC and CDN origins, Google Fonts is loaded via `<link>`, and Next injects inline bootstrap scripts;
+a wrong allowlist would **silently break wallet connection** — a worse failure than the gap it closes, and
+one that can't be verified from here without a browser + real wallet. **Production fix:** author a full CSP
+(`script-src 'self' 'unsafe-inline'` or nonce-based; `connect-src 'self' https://*.walletconnect.com
+wss://*.walletconnect.com` + the BOT Chain RPC origin; `style-src 'self' 'unsafe-inline'
+https://fonts.googleapis.com`; `font-src https://fonts.gstatic.com`; `img-src 'self' data:`), then verify the
+full connect→sign→verify flow in a browser and tighten from report-only mode. The anti-frame + hardening
+headers above ship now because they carry no such risk.
+
+### 24.4 Rest of the live audit — healthy
+
+Probed read-only against the deploy: session cookie is `Secure; HttpOnly; SameSite=lax`; cross-origin POST to
+`/api/auth/verify` → `403 cross-origin request refused`; every wallet-scoped route → `401` signed out;
+malformed/bogus verify payloads → `400`/`401` (never `500`); unknown routes → `404`; `GET` on POST-only
+routes → `405`; all nine pages render `200`. The one cosmetic nit — `405` responses carry an empty body while
+other errors use a JSON `{error}` envelope — is left as-is (Next's default method-not-allowed; no security or
+UX impact).
+
+### 24.5 Gates — real output (2026-08-20)
+
+```
+$ pnpm exec vitest run app/api/auth/nonce.test.ts app/security-headers.test.ts
+ Test Files  2 passed (2)
+      Tests  4 passed (4)
+
+$ pnpm --filter web typecheck
+> tsc --noEmit                                    (exit 0, no output = clean)
+
+$ pnpm --filter web lint
+> eslint .                                        (exit 0, no output = clean)
+
+$ pnpm format:check
+> prettier --check .
+All matched files use Prettier code style!
+
+$ pnpm --filter web test
+ Test Files  65 passed | 7 skipped (72)
+      Tests  524 passed | 76 skipped (600)      # +4 vs prior 520 = the new nonce (3) + headers (1) tests
+```
+
+Skips are the usual DB/Gemini-gated integration suites (no Postgres at `localhost:5432`, no `GEMINI_API_KEY`),
+which skip cleanly with printed reasons. **No contract change**, so `forge test` was not re-run. **Grep gate**
+over the changed files (`next.config.ts`, `app/api/auth/nonce/route.ts`, `app/providers.tsx`, `app/layout.tsx`,
+
+- the two new tests) for `mock|fake|TODO: real|hardcoded`: only hits are the nonce test's own
+  `vi.mock("next/headers")` seam (mirrors `app/api/security.test.ts`) — no faked runtime behavior.
