@@ -161,6 +161,11 @@ exposes the verified address; `POST /api/auth/logout` destroys the session.
 Signed out, `/profile` shows a connect prompt instead of spinning; the connect affordance itself
 has been real since phase 1.
 
+**Build-hardening (2026-08-20, see §23.4).** `lib/wagmi/config.ts` no longer hard-crashes the
+production build when `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` is unset (the state of a fresh Vercel
+project). It falls back to a real injected-wallet config and honestly gates WalletConnect off until
+the id is set — no fakes. Root cause, local reproduction, and fix are in §23.4.
+
 ## 4. CSRF / origin defence and SIWE session — landed in step 9 (phase 1)
 
 **Status: implemented.** Renamed from "CSRF protection was dropped in the framework migration"
@@ -1660,3 +1665,97 @@ contract proof). **Grep gate** over the files this item touched
 **Items 11–13 are now complete.** What remains is operational and the user's, unchanged: rotate the three
 exposed secrets, refresh the git credential and push, set production secrets, apply migrations, and redeploy
 the vault so item 11's signed-receipt ABI is live.
+
+### 23.4 Production build hardened against a missing WalletConnect projectId — FIXED (2026-08-20)
+
+**Symptom (real Vercel log).** After the Prisma build fix (`d2a4a22`), the Vercel build cleared
+`prisma generate` and TypeScript, then crashed in static prerendering:
+
+```
+Error occurred prerendering page "/_not-found".
+Error: No projectId found. Every dApp must now provide a WalletConnect Cloud projectId to enable
+WalletConnect v2 https://www.rainbowkit.com/docs/installation#configure
+Export encountered an error on /_not-found/page: /_not-found, exiting the build.
+⨯ Next.js build worker exited with code: 1 and signal: null
+```
+
+**Root cause.** `lib/wagmi/config.ts` built the wagmi config with RainbowKit's `getDefaultConfig`,
+which _always_ includes the WalletConnect wallet. That connector (`getWalletConnectConnector`) throws
+`No projectId found` synchronously the instant the projectId is empty. Because the config is built at
+module load and imported by the root providers (`app/providers.tsx`), an empty projectId crashes _every_
+server render — including the static prerender of `/_not-found`, `/achievements`, … — and fails the whole
+production build. `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` is inlined at build time: a local `.env` supplies
+it (so it never reproduced locally), but a fresh Vercel project with the var unset hits it on the first
+deploy. Making one _optional public_ credential a hard build dependency is unacceptable fragility (rule 6).
+
+**Reproduced locally first, not assumed.** Forcing an empty projectId reproduced the Vercel crash exactly
+(build #1, PRE-fix):
+
+```
+$ NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID="" pnpm --filter web build
+Error occurred prerendering page "/achievements".
+Error: No projectId found. Every dApp must now provide a WalletConnect Cloud projectId ...
+Export encountered an error on /achievements/page: /achievements, exiting the build.
+⨯ Next.js build worker exited with code: 1 and signal: null
+EXIT=1
+```
+
+**Fix — honest gating, no fakes (rules 1/6).** `config.ts` now branches on whether a real projectId is
+present, exporting `isWalletConnectConfigured` so UI/tests can see which path is live:
+
+- **With** a projectId (production): `getDefaultConfig` unchanged — the full wallet list including
+  WalletConnect. Byte-for-byte the previously-working call.
+- **Without** one: a real, still-functional `createConfig` offering RainbowKit's `injectedWallet`
+  (browser-extension wallets — MetaMask/Brave/Rabby/…), which needs no projectId and so never reaches the
+  throw. WalletConnect is honestly unavailable until the id is set; the fallback is a genuine connector, not
+  a stub. The full wallet list returns automatically the moment the env var is set.
+
+**Proof the fix builds both ways — real output.** Empty projectId (build #2, the fresh-Vercel scenario) and
+the real projectId (build #3, the production `getDefaultConfig` path) both exit 0 and prerender all 12 pages,
+including the `/achievements` page that crashed above:
+
+```
+$ NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID="" pnpm --filter web build     # build #2, empty projectId
+✓ Generating static pages using 7 workers (12/12) in 8.3s
+Route (app)
+├ ○ /_not-found
+├ ○ /achievements        ← crashed pre-fix, now prerendered as static content
+…
+EXIT=0
+
+$ pnpm --filter web build                                             # build #3, real projectId
+✓ Generating static pages using 7 workers (12/12) in 6.2s
+Route (app)
+├ ○ /_not-found
+├ ○ /achievements
+…
+EXIT=0
+```
+
+**Regression guard.** New `lib/wagmi/config.test.ts` (3 tests) pins the branch: an empty projectId must
+route to the injected-only fallback and must never call `getDefaultConfig`/WalletConnect; a present
+projectId must use `getDefaultConfig`. The heavy wallet libraries are mocked — importing the real
+wagmi/RainbowKit graph costs ~25s — and the end-to-end no-throw proof is the `next build` runs above.
+
+**Gates re-run this session — real output:**
+
+```
+$ pnpm --filter web typecheck
+> tsc --noEmit                                    (exit 0, no output = clean)
+
+$ pnpm --filter web lint
+> eslint .                                        (exit 0, no output = clean)
+
+$ pnpm format:check
+> prettier --check .
+All matched files use Prettier code style!
+
+$ pnpm --filter web test
+ Test Files  63 passed | 7 skipped (70)
+      Tests  520 passed | 76 skipped (596)
+```
+
+**No contract change**, so `forge test` was not re-run. **Grep gate** over the two changed code files
+(`lib/wagmi/config.ts`, `lib/wagmi/config.test.ts`) for `mock|fake|TODO: real|hardcoded`: every hit is the
+test's own mocking scaffolding (`vi.mock`/`vi.hoisted`, by design) or the code comment stating the injected
+fallback is explicitly _not_ a stub — no faked runtime behavior.
