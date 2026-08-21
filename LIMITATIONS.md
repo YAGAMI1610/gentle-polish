@@ -1869,3 +1869,125 @@ over the changed files (`next.config.ts`, `app/api/auth/nonce/route.ts`, `app/pr
 
 - the two new tests) for `mock|fake|TODO: real|hardcoded`: only hits are the nonce test's own
   `vi.mock("next/headers")` seam (mirrors `app/api/security.test.ts`) — no faked runtime behavior.
+
+## 25. "Failed to sign message" — verify-step hardening (2026-08-21)
+
+A follow-up to §24. After the §24 fixes — and once a local `SESSION_PASSWORD` was set so "Error preparing
+message" no longer fires — the user hit a **later** failure: the wallet connects, but signing does not
+complete, reported as **"failed to sign message"**.
+
+### 25.1 Which phase actually fails — sign vs. verify
+
+RainbowKit's authentication adapter runs three phases, each with its own **fixed, un-rewordable** internal
+error copy. Knowing which copy maps to which phase is what makes the report diagnosable:
+
+| Phase                        | Whose code runs                                          | RainbowKit copy on failure                     |
+| ---------------------------- | -------------------------------------------------------- | ---------------------------------------------- |
+| get nonce + build message    | **ours** (`getNonce` / `createMessage`)                  | "Error preparing message, please retry!" (§24) |
+| wallet signs the message     | **RainbowKit/wagmi** (`signMessageAsync`) + the wallet   | "Error signing message, please retry!"         |
+| verify signature server-side | **ours** (`verify` → `POST /api/auth/verify`)            | "Error verifying signature, please retry!"     |
+
+Being past "preparing" proves `getNonce` + `createMessage` already succeed. Two candidates remain:
+
+- **Wallet sign step** — entirely inside RainbowKit/wagmi and the wallet; our code has **no hook** there.
+  Failures are environmental: the user rejects the prompt, the wallet is on the wrong chain, a WalletConnect
+  relay hiccups, or an injected provider stalls. Nothing in our codebase to "fix" — only to make diagnosable.
+- **Verify step (`/api/auth/verify`)** — this we own, and it had a real, concrete defect.
+
+**The confirmed, fixable defect:** the verify route checks the signature (real crypto) and then does
+**infrastructure** work — `ensureWallet(address)` (a Prisma upsert) + `session.save()` (the cookie). If the
+DB is unreachable or migrations are not applied — the current local / not-yet-migrated state — that upsert
+throws, the route returned a **generic 500 with no log**, and RainbowKit renders every non-ok verify response
+as the same generic sign-in failure. So a valid, correctly-signed message looked identical to a *rejected*
+signature, and the server said nothing about why.
+
+### 25.2 Fix — an honest, logged 503 instead of a silent 500 (no behavior faked)
+
+- **`app/api/auth/verify/route.ts`** — the persist/session block is now wrapped. Once `verifySiwe` returns,
+  the signature **is** valid; a subsequent Prisma/cookie failure is **not** an auth rejection. The route now
+  `console.error`s the real cause server-side and throws `ServiceUnavailableError` → **503**
+  `{ error: "sign-in is temporarily unavailable — please try again shortly" }`. The raw DB error (host/port)
+  is logged for ops, **never** sent to the client. The outer catch also logs any genuine 5xx (e.g. a missing
+  `SESSION_PASSWORD` breaking `getSession`) instead of an opaque "internal error". Anti-replay is unchanged:
+  the nonce is consumed (`delete session.nonce`) inside the same block, only on success.
+- **`app/providers.tsx`** — the `verify` adapter fn now parses the server's JSON `error` body and shows it in
+  the `sonner` toast, so the user sees the honest "temporarily unavailable" rather than a bare status code.
+  `createMessage` logs a breadcrumb (`[auth] SIWE message prepared — requesting wallet signature…`) so the
+  sign-vs-verify split is visible in DevTools (see §25.4). No wallet behavior is faked — RainbowKit still
+  owns the sign step; we only observe around it.
+
+### 25.3 Runtime requirement — the DB must be reachable AND migrated
+
+The verify route's persistence is real (rules 1/3 — the DB is the source of truth). Sign-in therefore
+requires a reachable, migrated Postgres. This is a **deployment requirement, not a code bug**:
+
+- **Local dev:** `docker compose up -d db` (or point `DATABASE_URL` at any Postgres), then
+  `pnpm --filter web exec prisma migrate deploy`. Without it, `ensureWallet` throws → the honest 503 (before
+  this fix: a silent 500 that looked like a rejected signature).
+- **Vercel:** set `DATABASE_URL` to the pooled connection string and apply migrations
+  (`prisma migrate deploy` in the release step, or once manually). If sign-in returns 503 in production, the
+  DB env/migration is the first thing to check — the log line
+  `[auth/verify] signature verified but sign-in could not be completed` pinpoints exactly this step.
+- **Domain binding (optional robustness):** `verifySiwe` checks the SIWE `domain` against
+  `getExpectedDomain(req)`, which prefers the `APP_ORIGIN`/`NEXT_PUBLIC_APP_URL` host and falls back to the
+  request host. Behind Vercel's proxy the request host is normally correct, but setting
+  `NEXT_PUBLIC_APP_URL=https://commitai-bot.vercel.app` (and/or `APP_ORIGIN`) makes the domain check
+  deterministic regardless of proxy-header quirks. **Not changed blindly here** — the code already honors it;
+  just set the env if a domain-mismatch 401 ever appears.
+
+### 25.4 Diagnosing sign vs. verify from DevTools
+
+With the breadcrumbs in place, the browser console + network tab tell you which phase failed:
+
+- Console shows `[auth] SIWE message prepared — requesting wallet signature…` then **nothing**, and there is
+  **no** `POST /api/auth/verify` in the network tab → the **wallet sign step** failed (wallet/chain/rejection
+  /relay — environmental, not our server). Check the wallet is unlocked, on the right chain, and connected;
+  retry, or try an injected wallet.
+- A `POST /api/auth/verify` **is** sent and returns non-2xx → the **verify step**. Read the status:
+  **401** = signature/nonce/domain genuinely rejected; **503** = signature valid but the DB/session could not
+  persist (apply §25.3); **400** = malformed body. The toast now echoes the server's own message.
+
+### 25.5 Gates — real output (2026-08-21)
+
+Changed files: `app/api/auth/verify/route.ts`, `app/providers.tsx`, and one new test
+`app/api/auth/verify.test.ts` (3 tests — real viem EIP-191 signatures; only the `ensureWallet` DB seam is
+mocked, so both the persist-OK → 200 path and the persist-FAILS → 503 path are exercised, plus a forged
+signature → 401 before the DB is touched).
+
+```
+$ pnpm exec vitest run app/api/auth/verify.test.ts --reporter=verbose
+ ✓ POST /api/auth/verify > completes sign-in (200 + verified address) for a valid signature when the DB is available
+ ✓ POST /api/auth/verify > returns a LOGGED 503 (not 401, not a silent 500) when the signature is valid but persistence fails
+ ✓ POST /api/auth/verify > still rejects an invalid signature with 401 before ever touching the DB
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+
+$ pnpm --filter web typecheck        # tsc --noEmit
+TYPECHECK_EXIT=0                      # (no output = clean)
+
+$ pnpm --filter web lint             # eslint .
+LINT_EXIT=0                           # (clean after prettier --write fixed one ternary-paren nit)
+
+$ pnpm exec prettier --check app/api/auth/verify/route.ts app/api/auth/verify.test.ts app/providers.tsx
+All matched files use Prettier code style!
+
+$ pnpm --filter web test             # full suite
+ Test Files  66 passed | 7 skipped (73)
+      Tests  527 passed | 76 skipped (603)      # +3 vs prior 524 = the new verify tests
+ VITEST_EXIT=0
+
+$ pnpm --filter web build            # prisma generate && next build --webpack
+✓ Generating static pages using 7 workers (12/12) in 9.7s
+ BUILD_EXIT=0
+```
+
+Two log artifacts that are **expected, not failures**: (1) an ethers `TypeError: invalid v (value=17)` printed
+to stderr — that is the forged-signature test (`0x11…` has an invalid recovery byte), which is exactly why the
+route returns 401; the test asserts on that 401. (2) `prisma:error … Can't reach database server at
+localhost:5432` followed by `SKIPPED — no migrated Postgres` — the DB/Gemini-gated integration suites skipping
+cleanly with printed reasons (the 76 skips). The build finishes with only the two **pre-existing** warnings
+(the `middleware`→`proxy` deprecation notice and `@metamask/sdk`'s optional `@react-native-async-storage`
+peer, transitive through the wallet stack) — neither introduced by this change. **No contract change**, so
+`forge test` was not re-run. **Grep gate** over the changed source (`verify/route.ts`, `providers.tsx`): zero
+`mock|fake|TODO: real|hardcoded` hits; the only hits are in the test file (`vi.mock` seams + the comment
+"the ONLY faked thing is whether ensureWallet succeeds") — the signature crypto is real.

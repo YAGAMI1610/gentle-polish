@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { assertSameOrigin, getExpectedDomain } from "@/lib/auth/origin";
-import { UnauthorizedError, toHttpError } from "@/lib/auth/errors";
+import { ServiceUnavailableError, UnauthorizedError, toHttpError } from "@/lib/auth/errors";
 import { getSession } from "@/lib/auth/session";
 import { verifySiwe } from "@/lib/auth/siwe";
 import { ensureWallet } from "@/lib/db";
@@ -35,16 +35,39 @@ export async function POST(req: Request) {
       domain: getExpectedDomain(req),
     });
 
-    await ensureWallet(address);
-    session.address = address;
-    session.chainId = chainId;
-    // Consume the nonce so the same signature can never be replayed.
-    delete session.nonce;
-    await session.save();
+    // Past this line the signature is cryptographically valid — the wallet DID sign.
+    // Persisting the wallet row and saving the session are INFRASTRUCTURE steps
+    // (Prisma + cookie). If they fail (database unreachable, migrations not applied),
+    // that is NOT an auth rejection: surface a LOGGED 503 ("temporarily unavailable"),
+    // not a silent generic 500 that RainbowKit renders identically to "your signature
+    // was rejected" — the very thing that made a valid sign-in look like a signing
+    // failure. See LIMITATIONS.md §25.
+    try {
+      await ensureWallet(address);
+      session.address = address;
+      session.chainId = chainId;
+      // Consume the nonce so the same signature can never be replayed.
+      delete session.nonce;
+      await session.save();
+    } catch (persistErr) {
+      console.error(
+        "[auth/verify] signature verified but sign-in could not be completed (persist/session step):",
+        persistErr,
+      );
+      throw new ServiceUnavailableError(
+        "sign-in is temporarily unavailable — please try again shortly",
+      );
+    }
 
     return NextResponse.json({ address });
   } catch (err) {
     const { status, body } = toHttpError(err);
+    // 4xx are expected auth/client outcomes and stay quiet; a 500 here is genuinely
+    // unexpected (e.g. a missing SESSION_PASSWORD breaking getSession), so log it so
+    // it is diagnosable server-side instead of an opaque "internal error".
+    if (status >= 500 && !(err instanceof ServiceUnavailableError)) {
+      console.error("[auth/verify] unexpected failure:", err);
+    }
     return NextResponse.json(body, { status });
   }
 }

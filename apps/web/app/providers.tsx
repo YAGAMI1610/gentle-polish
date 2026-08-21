@@ -84,7 +84,7 @@ function AuthProvider({ children }: { children: ReactNode }) {
         },
         createMessage: ({ nonce, address, chainId }) => {
           try {
-            return new SiweMessage({
+            const message = new SiweMessage({
               domain: window.location.host,
               address,
               statement: "Sign in to CommitAI to manage your goals and commitments.",
@@ -93,6 +93,12 @@ function AuthProvider({ children }: { children: ReactNode }) {
               chainId,
               nonce,
             }).prepareMessage();
+            // Breadcrumb: the message is built and RainbowKit now asks the wallet to
+            // sign it. If you see this line followed by a wallet "Error signing
+            // message" and NO later "[auth] verify" line, the failure is the wallet's
+            // own sign step (network/chain/rejection), not our server.
+            console.info("[auth] SIWE message prepared — requesting wallet signature…");
+            return message;
           } catch (err) {
             // prepareMessage() throws e.g. on a non-EIP-55 address or a malformed field.
             console.error("[auth] failed to build the SIWE message:", err, { chainId });
@@ -121,8 +127,18 @@ function AuthProvider({ children }: { children: ReactNode }) {
           if (!res.ok) {
             const body = await res.text().catch(() => "");
             console.error(`[auth] verify failed: HTTP ${res.status}`, body);
-            toast.error("Sign-in verification failed", {
-              description: `The server returned ${res.status}. Please try connecting again.`,
+            // Surface the server's OWN message when it sent one (e.g. the honest
+            // "sign-in is temporarily unavailable" 503), so the toast tells the user
+            // what actually happened instead of only a bare status code.
+            let serverMessage = "";
+            try {
+              serverMessage = (JSON.parse(body) as { error?: string }).error ?? "";
+            } catch {
+              // non-JSON body — fall back to the status-based description below
+            }
+            toast.error("Couldn't complete sign-in", {
+              description:
+                serverMessage || `The server returned ${res.status}. Please try connecting again.`,
             });
             return false;
           }
