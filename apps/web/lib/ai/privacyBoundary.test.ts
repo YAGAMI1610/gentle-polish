@@ -3,6 +3,7 @@ import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createDecisionInput } from "@/lib/db/schemas";
+import { GroqProvider, type GroqFetch } from "./groq";
 import { buildSystemInstruction } from "./promptGuards";
 import type { AIProvider, GenerateRequest, GenerateResult } from "./provider";
 import { runTurn } from "./runner";
@@ -12,9 +13,11 @@ import { toolSpecs } from "./tools/registry";
  * Free-tier privacy boundary (LIMITATIONS.md §10, item 13). Always-on: no key, no
  * network, no database.
  *
- * CommitAI deliberately stays on Gemini's **free** tier, where Google may use prompts
- * and responses to improve their products. That is only acceptable because raw evidence
- * never leaves this process: the model is given goal/verification *metadata* and its own
+ * CommitAI deliberately stays on a model vendor's **free** tier, where prompts and
+ * responses may be used to improve that vendor's products. That is only acceptable
+ * because raw evidence never leaves this process — and it holds for EVERY provider
+ * (`gemini.ts`, `groq.ts`), because the guarantee is enforced here rather than by any
+ * vendor's terms: the model is given goal/verification *metadata* and its own
  * summaries, never a user's uploaded bytes or `contentText`. That property is easy to
  * break by accident — one `evidence.contentText` spliced into a prompt would do it, and
  * nothing about it would fail at runtime — so these tests make it fail HERE.
@@ -22,8 +25,10 @@ import { toolSpecs } from "./tools/registry";
  * Three complementary layers, because no single one is sufficient:
  *   1. Reachability (source scan): nothing under `lib/ai/` even names a raw-evidence
  *      field, so no prompt can splice one in.
- *   2. Egress (source scan): exactly one file imports the vendor SDK, so there is one
- *      place data can leave for the model at all.
+ *   2. Egress (source scan): each provider file is the ONLY place its vendor can be
+ *      reached — `gemini.ts` alone imports the SDK, `groq.ts` alone names the Groq
+ *      endpoint — so every way out for data is one of two audited files. Groq needs its
+ *      own guard because it speaks plain HTTP: an SDK-import scan cannot see a `fetch`.
  *   3. Payload (behavioural): the only thing that crosses the `AIProvider` boundary is
  *      `{system, messages, tools}` built from the trust-boundary prompt, the user's own
  *      chat turns, and tool results — asserted against a recording provider.
@@ -122,7 +127,7 @@ describe("no raw evidence is reachable from the AI layer (source guard)", () => 
   });
 });
 
-describe("there is exactly one egress point to the model (source guard)", () => {
+describe("the egress points to the model are exactly the provider files (source guard)", () => {
   it("only lib/ai/gemini.ts imports the vendor SDK", () => {
     // Scans the WHOLE app, not just `lib/ai/` — the point is that no route, component or
     // job can talk to Google directly, bypassing the boundary asserted below.
@@ -132,6 +137,17 @@ describe("there is exactly one egress point to the model (source guard)", () => 
     const importsSdk = /from\s*["']@google\/genai["']/;
     const importers = webSources.filter((f) => importsSdk.test(f.text)).map((f) => f.path);
     expect(importers).toEqual(["lib/ai/gemini.ts"]);
+  });
+
+  it("only lib/ai/groq.ts names the Groq API host", () => {
+    // The SDK scan above CANNOT police Groq: it speaks an OpenAI-compatible HTTP API
+    // with no SDK, so a bare `fetch("https://api.groq.com/...")` in any route, job or
+    // component would be a second egress point that no import regex would ever see.
+    // Pinning the host to the provider file closes that hole.
+    expect(webSources.length).toBeGreaterThanOrEqual(150);
+    const namesGroqHost = /api\.groq\.com/;
+    const namers = webSources.filter((f) => namesGroqHost.test(f.text)).map((f) => f.path);
+    expect(namers).toEqual(["lib/ai/groq.ts"]);
   });
 });
 
@@ -219,6 +235,47 @@ describe("what crosses the AIProvider boundary carries no evidence payload", () 
     // `evidenceSummary` flows model → app (it is stored for display), NOT app → model,
     // and the schema tells the model in so many words not to paste content into it.
     expect(params.properties["evidenceSummary"]?.description).toMatch(/not a paste/i);
+  });
+
+  it("carries no evidence payload ON THE WIRE when Groq is the provider talking", async () => {
+    // The test above inspects the `AIProvider` *request object*. That cannot catch a
+    // provider which adds something on its way out, so this one asserts against the
+    // real serialised HTTP body: the actual bytes that would leave the process. Only
+    // the network hop is doubled — the mapping and body assembly are the real code.
+    const transmitted: string[] = [];
+    const fetchFn: GroqFetch = async (_url, init) => {
+      transmitted.push(init.body);
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ choices: [{ message: { role: "assistant", content: "noted" } }] }),
+      };
+    };
+
+    await runTurn({
+      provider: new GroqProvider("test-key-never-real", "openai/gpt-oss-120b", fetchFn),
+      walletAddress: "0x1111111111111111111111111111111111111111",
+      userMessage: "I ran 5km this morning.",
+    });
+
+    expect(transmitted).toHaveLength(1);
+    const body = JSON.parse(transmitted[0] ?? "{}") as Record<string, unknown>;
+    // The model id, the transcript, and the tool schemas. There is no other field —
+    // so there is nothing an upload could ride in, exactly as for the Gemini path.
+    expect(Object.keys(body).sort()).toEqual(["messages", "model", "tools"]);
+
+    // The transcript is the author-controlled system prompt plus the user's own turn.
+    const messages = body["messages"] as { role: string; content: string }[];
+    expect(messages.map((m) => m.role)).toEqual(["system", "user"]);
+    expect(messages[0]?.content).toContain("TRUST BOUNDARY");
+    expect(messages[1]?.content).toBe("I ran 5km this morning.");
+
+    // And nothing anywhere in the payload — prompt, tool schemas, or transcript —
+    // names a raw-evidence field.
+    for (const accessor of RAW_EVIDENCE_ACCESSORS) {
+      expect(transmitted[0], accessor).not.toContain(accessor);
+    }
   });
 });
 

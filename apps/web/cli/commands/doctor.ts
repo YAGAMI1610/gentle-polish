@@ -5,6 +5,7 @@
  * (no keys, URLs-with-creds, or addresses beyond the public vault). Use it to check
  * a checkout is wired up before running reads or preparing transactions.
  */
+import { aiApiKeyEnvVar, aiProviderName } from "../../lib/ai/factory";
 import { getChainId, readAttestorKey } from "../../lib/chain/index";
 import {
   emit,
@@ -68,6 +69,21 @@ export async function run(
     }
   }
 
+  // Which model key matters depends on AI_PROVIDER, so report the SELECTED provider's
+  // key instead of a hardcoded one: a doctor that always names GEMINI_API_KEY is just
+  // wrong on a Groq deployment. Both keys' presence is reported either way (holding
+  // both in one env is fine — only the selected one is required). A typo'd selector is
+  // reported as the error it is rather than crashing the whole report.
+  let aiProvider: string;
+  let aiKeyVar: string | null;
+  try {
+    aiProvider = aiProviderName();
+    aiKeyVar = aiApiKeyEnvVar();
+  } catch (err) {
+    aiProvider = `INVALID — ${err instanceof Error ? err.message : "unknown value"}`;
+    aiKeyVar = null;
+  }
+
   const report = {
     chainId: config.chainId,
     rpcUrl: config.rpcUrl,
@@ -78,9 +94,13 @@ export async function run(
     rpcReachable,
     liveChainId,
     chainIdMatches: liveChainId === null ? null : liveChainId === config.chainId,
+    aiProvider,
+    aiApiKeyEnvVar: aiKeyVar,
+    aiConfigured: aiKeyVar !== null && isSet(aiKeyVar),
     present: {
       DATABASE_URL: isSet("DATABASE_URL"),
       GEMINI_API_KEY: isSet("GEMINI_API_KEY"),
+      GROQ_API_KEY: isSet("GROQ_API_KEY"),
       SESSION_PASSWORD: isSet("SESSION_PASSWORD"),
     },
   };
@@ -108,6 +128,9 @@ function renderReport(
     rpcReachable: boolean | null;
     liveChainId: number | null;
     chainIdMatches: boolean | null;
+    aiProvider: string;
+    aiApiKeyEnvVar: string | null;
+    aiConfigured: boolean;
     present: Record<string, boolean>;
   },
   rpcError: string | null,
@@ -124,9 +147,13 @@ function renderReport(
     line("rpc reachable", yn(r.rpcReachable) + (rpcError ? ` (${rpcError})` : "")),
     line("live chainId", r.liveChainId === null ? "—" : String(r.liveChainId)),
     line("chainId matches", yn(r.chainIdMatches)),
+    line("ai provider", r.aiProvider),
+    line("ai key required", r.aiApiKeyEnvVar ?? "—"),
+    line("ai configured", yn(r.aiConfigured)),
     "  present (booleans; values never shown):",
     line("  DATABASE_URL", yn(r.present["DATABASE_URL"] ?? false)),
     line("  GEMINI_API_KEY", yn(r.present["GEMINI_API_KEY"] ?? false)),
+    line("  GROQ_API_KEY", yn(r.present["GROQ_API_KEY"] ?? false)),
     line("  SESSION_PASSWORD", yn(r.present["SESSION_PASSWORD"] ?? false)),
   ];
   return out.join("\n");

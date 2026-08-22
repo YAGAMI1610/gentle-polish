@@ -417,7 +417,7 @@ schema description tells the model to write its own words rather than paste cont
 
 **Why this is verified rather than asserted.** One `evidence.contentText` spliced into a prompt
 would silently break the whole claim, and nothing would fail at runtime — so
-`lib/ai/privacyBoundary.test.ts` (**11 always-on tests**, no key, no network, no DB) makes it fail
+`lib/ai/privacyBoundary.test.ts` (**13 always-on tests**, no key, no network, no DB) makes it fail
 in CI instead, in three independent layers:
 
 1. **Reachability (source guard).** No file under `lib/ai/` may so much as _name_ `contentText`,
@@ -425,9 +425,12 @@ in CI instead, in three independent layers:
    reachable from the AI layer, no prompt can carry it. The scan asserts it found a real,
    non-empty file set first, so it cannot pass vacuously. (Verified to bite: temporarily adding
    `evidence.contentText` to `lib/ai/runner.ts` fails this test.)
-2. **Egress (source guard).** Exactly one file in `apps/web` carries a real
-   `from "@google/genai"` specifier — `lib/ai/gemini.ts` — so there is a single place anything can
-   leave for the model, and it is a pure 1:1 mapping of the `AIProvider` request.
+2. **Egress (source guard).** Every way out to a model is one audited provider file — one guard per
+   vendor. Exactly one file in `apps/web` carries a real `from "@google/genai"` specifier
+   (`lib/ai/gemini.ts`), and exactly one names the host `api.groq.com` (`lib/ai/groq.ts`); each is a
+   pure 1:1 mapping of the `AIProvider` request. The second guard is not redundant: Groq speaks an
+   OpenAI-compatible HTTP API with no SDK, so a bare `fetch` to it from any route, job or component
+   would be an unpoliced egress point that an SDK-import scan could never see (§26).
 3. **Payload (behavioural).** A recording provider driven through the real `runTurn` captures
    exactly what crosses the `AIProvider` boundary: the request carries only
    `{system, messages, tools}` — no field an upload could ride in — the transcript is exactly the
@@ -1356,12 +1359,12 @@ verificationHash, modelVersionHash, deadline}`, so the on-chain approval is cryp
   boundary. Free tier is a **deliberate** choice, not an oversight: on it Google may use prompts/responses
   for product improvement, which is acceptable here only because **no raw evidence ever reaches the model**
   — uploaded bytes, `Evidence.contentText` and blob storage keys are unreachable from `lib/ai/` (the AI layer
-  may not even name them), there is exactly one SDK egress point, and the `AIProvider` request carries only
-  `{system, messages, tools}`. The decision log stores an evidence id/hash only. Previously documented;
-  now **enforced by 11 always-on tests** (`lib/ai/privacyBoundary.test.ts`) so a future prompt edit that
-  splices in evidence text fails in CI instead of silently leaking. Paid tier / self-hosted inference stays
-  the recommended upgrade (it removes the training caveat on the user's own chat text) but is **not** required
-  for the evidence guarantee. → §10.1.
+  may not even name them), each provider file is the only egress point for its own vendor (§26), and the
+  `AIProvider` request carries only `{system, messages, tools}`. The decision log stores an evidence id/hash
+  only. Previously documented; now **enforced by 13 always-on tests** (`lib/ai/privacyBoundary.test.ts`) so a
+  future prompt edit that splices in evidence text fails in CI instead of silently leaking. Paid tier /
+  self-hosted inference stays the recommended upgrade (it removes the training caveat on the user's own chat
+  text) but is **not** required for the evidence guarantee. → §10.1.
 - **Sandbox/tooling caveats (environment, not repo defects):** Turbopack can't build in this PRoot sandbox
   so `dev`/`build` pass `--webpack` (§7); RainbowKit's unused Coinbase x402 peer deps are aliased to an empty
   module (§15); benign wallet-stack optional-dependency build warnings are left visible rather than silenced
@@ -1881,11 +1884,11 @@ complete, reported as **"failed to sign message"**.
 RainbowKit's authentication adapter runs three phases, each with its own **fixed, un-rewordable** internal
 error copy. Knowing which copy maps to which phase is what makes the report diagnosable:
 
-| Phase                        | Whose code runs                                          | RainbowKit copy on failure                     |
-| ---------------------------- | -------------------------------------------------------- | ---------------------------------------------- |
-| get nonce + build message    | **ours** (`getNonce` / `createMessage`)                  | "Error preparing message, please retry!" (§24) |
-| wallet signs the message     | **RainbowKit/wagmi** (`signMessageAsync`) + the wallet   | "Error signing message, please retry!"         |
-| verify signature server-side | **ours** (`verify` → `POST /api/auth/verify`)            | "Error verifying signature, please retry!"     |
+| Phase                        | Whose code runs                                        | RainbowKit copy on failure                     |
+| ---------------------------- | ------------------------------------------------------ | ---------------------------------------------- |
+| get nonce + build message    | **ours** (`getNonce` / `createMessage`)                | "Error preparing message, please retry!" (§24) |
+| wallet signs the message     | **RainbowKit/wagmi** (`signMessageAsync`) + the wallet | "Error signing message, please retry!"         |
+| verify signature server-side | **ours** (`verify` → `POST /api/auth/verify`)          | "Error verifying signature, please retry!"     |
 
 Being past "preparing" proves `getNonce` + `createMessage` already succeed. Two candidates remain:
 
@@ -1898,7 +1901,7 @@ Being past "preparing" proves `getNonce` + `createMessage` already succeed. Two 
 **infrastructure** work — `ensureWallet(address)` (a Prisma upsert) + `session.save()` (the cookie). If the
 DB is unreachable or migrations are not applied — the current local / not-yet-migrated state — that upsert
 throws, the route returned a **generic 500 with no log**, and RainbowKit renders every non-ok verify response
-as the same generic sign-in failure. So a valid, correctly-signed message looked identical to a *rejected*
+as the same generic sign-in failure. So a valid, correctly-signed message looked identical to a _rejected_
 signature, and the server said nothing about why.
 
 ### 25.2 Fix — an honest, logged 503 instead of a silent 500 (no behavior faked)
@@ -1991,3 +1994,200 @@ peer, transitive through the wallet stack) — neither introduced by this change
 `forge test` was not re-run. **Grep gate** over the changed source (`verify/route.ts`, `providers.tsx`): zero
 `mock|fake|TODO: real|hardcoded` hits; the only hits are in the test file (`vi.mock` seams + the comment
 "the ONLY faked thing is whether ensureWallet succeeds") — the signature crypto is real.
+
+---
+
+## 26. Groq as a second AI provider behind the same `AIProvider` boundary (2026-08-21)
+
+**Status:** real and verified in-sandbox, **except** the live Groq call, which is key-gated and unrun here (no
+`GROQ_API_KEY` in this environment) — exactly the same standing as the live Gemini call (§8). Nothing changes
+for an existing deployment: `AI_PROVIDER` unset means Gemini, and the Gemini path is byte-for-byte the code it
+was before.
+
+### 26.1 What was added
+
+- **`lib/ai/groq.ts`** — `GroqProvider implements AIProvider`, talking to Groq's OpenAI-compatible
+  `POST https://api.groq.com/openai/v1/chat/completions`. **No new dependency**: Groq ships no SDK we need, so
+  this is Node's global `fetch` behind an injected `GroqFetch` seam (the `lib/storage/s3` DI idiom), which is
+  what lets the always-on tests exercise the real mapping and the real body assembly with no key and no
+  network. `groqFromEnv()` throws when `GROQ_API_KEY` is absent rather than attempting a keyless call.
+- **`lib/ai/factory.ts`** — `aiProviderName()` / `providerFromEnv()`, following the `getEvidenceStorage()`
+  precedent (`lib/storage/index.ts`): `AI_PROVIDER` selects `"gemini"` (default when unset or blank) or
+  `"groq"`, case- and whitespace-tolerant, and an **unrecognised value throws** — no silent fallback to a
+  provider the operator did not ask for (rule 1). Not memoized, matching `geminiFromEnv()`; providers are
+  stateless, so there is no reset seam to get wrong in tests.
+- **`lib/ai/probe.ts`** — adds `groqConfigured()`, `aiConfigured()` and `missingAiApiKeyEnvVar()`.
+  `aiConfigured()` checks only the **selected** provider's key: a Gemini key does not make a Groq deployment
+  configured, so the route's 503 cannot claim readiness it does not have. `geminiConfigured()` is unchanged.
+- **`app/api/ai/turn/route.ts`** — the one runtime caller: `geminiConfigured()` → `aiConfigured()`,
+  `geminiFromEnv()` → `providerFromEnv()`, and the 503 now names whichever key is actually missing instead of
+  hardcoding `GEMINI_API_KEY`. This **supersedes** the `runTurn({provider: geminiFromEnv(), …})` /
+  `!geminiConfigured()` wiring described in §17 and in the §21 table (row 1); both are dated build records and
+  are left as written.
+- **`provider.ts`, `runner.ts`, `promptGuards.ts`, `tools/` are untouched** — that is the actual claim being
+  proven here. The vendor boundary designed in §10 took a second vendor without a single change above it.
+- Env: `AI_PROVIDER`, `GROQ_API_KEY` (no default), `GROQ_MODEL` (`openai/gpt-oss-120b`, see 26.6) documented in both
+  `.env.example` and `.env.production.example`.
+
+### 26.2 The one place the shapes disagree: `tool_call_id`
+
+Gemini correlates a tool result to its call by **name**; OpenAI/Groq correlates by **id** — the
+`assistant.tool_calls[].id` must come back as `{role:"tool", tool_call_id}`. The neutral `AIMessage` union
+carries no id, and widening it would have pushed a vendor detail into every consumer. Resolved entirely
+inside `groq.ts` as a deterministic mapping pass: the call at transcript index `i`, position `j`, gets
+`call_<i>_<j>`, and each `tool_result` claims the first not-yet-matched call of the same name (FIFO), which is
+correct both for several calls in one turn and for two calls of the _same_ tool. An **orphan** `tool_result`
+(reachable only via a hand-crafted `history` in the request body, which the route's schema does permit)
+**throws, naming the tool**, instead of inventing an id and collecting an opaque Groq 400. Fail-loud beats a
+fabricated identifier — and it is strictly stricter than the Gemini path, which forwards orphans to Google.
+
+### 26.3 The privacy boundary now polices two egress points — a real hole, closed
+
+The §10.1 egress guard matched `from "@google/genai"` and asserted the importer set was exactly
+`["lib/ai/gemini.ts"]`. **A `fetch`-based provider is invisible to that regex.** Groq would have passed all 11
+tests while adding a second, entirely unpoliced way out of the process — and so would any future `fetch` to
+Groq from a route, job or component. Passing the suite and honouring the boundary had come apart.
+
+So the suite grew to **13 always-on tests**:
+
+- a second **egress** guard: across every non-test `.ts`/`.tsx` file in `apps/web`, exactly one may name the
+  host `api.groq.com`, and it must be `lib/ai/groq.ts`;
+- an **on-the-wire payload** guard: the real `runTurn` driving a real `GroqProvider` over a doubled transport,
+  asserting against the **serialised HTTP body** — top-level keys exactly `{model, messages, tools}`, the
+  transcript exactly the author-controlled system prompt plus the user's own turn, and none of the five
+  raw-evidence accessor names anywhere in the bytes. The pre-existing payload test inspects the `AIProvider`
+  _request object_, which by construction cannot catch a provider that adds something on the way out.
+
+Both new guards were **verified to bite**, and to pass again on revert (output in 26.5).
+
+### 26.4 Not done, deliberately (rule 6)
+
+- **The live Groq call is unverified here.** `lib/ai/groq.integration.test.ts` exists and skips with printed
+  instructions; it asserts the real model proposes a real `createGoal` call through our mapping. Until someone
+  runs it with a key, "Groq works end-to-end" is untested — the wire format, headers, error handling and
+  correlation are proven, real Groq acceptance is not.
+- ~~Two UI strings still name Gemini specifically.~~ **FIXED in 26.6** — both now render the server's own
+  reason instead of hardcoding a key name.
+- ~~`cli/commands/doctor.ts` reports `GEMINI_API_KEY` only.~~ **FIXED in 26.6** — it reads `AI_PROVIDER` and
+  reports the selected provider's key.
+- **No claim is made about Groq's data-use terms.** The env docs point the operator at Groq's own terms for
+  their tier rather than asserting a policy we have not verified. The evidence guarantee does not depend on the
+  answer — it is enforced in `lib/ai/` for whichever provider is selected — but the caveat on the user's own
+  chat text is a per-vendor, per-tier question the operator must check.
+
+### 26.5 Gates — real output (2026-08-21)
+
+Changed: `lib/ai/probe.ts`, `lib/ai/index.ts`, `lib/ai/privacyBoundary.test.ts`,
+`app/api/ai/turn/route.ts`, both env examples, this file. New: `lib/ai/groq.ts`, `lib/ai/factory.ts`,
+`lib/ai/groq.test.ts`, `lib/ai/factory.test.ts`, `lib/ai/groq.integration.test.ts`.
+
+```
+$ pnpm exec vitest run lib/ai/groq.test.ts lib/ai/factory.test.ts lib/ai/privacyBoundary.test.ts \
+    lib/ai/groq.integration.test.ts
+ ✓ lib/ai/groq.test.ts (19 tests) 61ms
+ ✓ lib/ai/factory.test.ts (12 tests) 34ms
+ ↓ lib/ai/groq.integration.test.ts (1 test | 1 skipped)     # GROQ_API_KEY not set — reason printed
+ ✓ lib/ai/privacyBoundary.test.ts (13 tests) 80ms           # was 11
+ Test Files  3 passed | 1 skipped (4)
+      Tests  44 passed | 1 skipped (45)
+
+$ pnpm --filter web test                       # full suite
+ Test Files  68 passed | 8 skipped (76)
+      Tests  559 passed | 78 skipped (637)
+ VITEST_EXIT=0
+
+$ pnpm --filter web typecheck                  # tsc --noEmit
+TYPECHECK_EXIT=0
+$ pnpm --filter web lint                       # eslint .
+LINT_EXIT=0
+$ pnpm format:check                            # prettier --check .  (repo-wide)
+All matched files use Prettier code style!
+FORMAT_CHECK_EXIT=0
+$ pnpm --filter web build                      # prisma generate && next build --webpack
+✓ Generating static pages using 7 workers (12/12) in 11.8s
+BUILD_EXIT=0
+```
+
+**Guard bite-checks** — a temporary second egress point, then a temporary raw-evidence mention, each reverted:
+
+```
+# 1. new file lib/api/__biteProbe.ts containing fetch("https://api.groq.com/openai/v1/chat/completions")
+ × the egress points to the model are exactly the provider files > only lib/ai/groq.ts names the Groq API host
+   AssertionError: expected [ 'lib/ai/groq.ts', …(1) ] to deeply equal [ 'lib/ai/groq.ts' ]
+
+# 2. a line naming evidence.contentText appended to lib/ai/groq.ts
+ × no raw evidence is reachable from the AI layer > names no raw-evidence field anywhere under lib/ai/
+   AssertionError: expected [ 'lib/ai/groq.ts → contentText' ] to deeply equal []
+
+# both reverted → Test Files 1 passed (1) / Tests 13 passed (13)
+```
+
+**Default-safety check** in a real process (not vitest), temp script deleted after the run:
+
+```
+AI_PROVIDER unset       → name: gemini | needs: GEMINI_API_KEY | configured: true
+                        → provider: GeminiProvider | model: gemini-3.7-flash
+AI_PROVIDER="groq"      → provider: GroqProvider | model: openai/gpt-oss-120b | needs: GROQ_API_KEY
+AI_PROVIDER="anthropic" → throws: unknown AI_PROVIDER "anthropic" — supported: "gemini", "groq"
+```
+
+**Grep gate** (`mock|fake|TODO: real|hardcoded`) over every changed file — 4 hits, all justified: three
+`fetchFn.mock.calls[...]` reads in `groq.test.ts` (vitest's own API for inspecting the injected transport, the
+`s3Storage.test.ts` idiom) and one doc-comment citation of "CLAUDE.md rule 1 (no fakes)" in `route.ts`. **Zero
+hits in `groq.ts`, `factory.ts`, `probe.ts` or `index.ts`** — no stub, no canned reply, no placeholder key.
+**No contract change**, so `forge test` was not re-run.
+
+**On the test counts.** 559 passed is +32 against §25's 527, while this change adds +33 always-on tests (19 +
+12 + 2) and +1 skipped. The missing 1 is not a lost test: `DATABASE_URL` here points at a **remote** Neon
+instance and `probeDatabaseReady()` races it against a 2 s timeout, so between full runs 1–5 DB-gated tests
+flip between passed and skipped depending on whether Neon answers in time. Observed directly: one intervening
+run reported `564 passed | 73 skipped` with `chainTx.test.ts` running and failing in its `beforeAll` at
+`121:3`, while `createMilestones` and `evaluateAnswers` each ran their DB-gated cases; run alone, `chainTx`
+skips cleanly at `5 skipped`, exit 0. Environmental, pre-existing, and unrelated to `lib/ai/` — no AI test
+touches the database. Two `next build` warnings (the `middleware`→`proxy` deprecation and `@metamask/sdk`'s
+optional `@react-native-async-storage` peer) are the same two §25 recorded.
+
+### 26.6 Deployment readiness pass — the two stales fixed, and a dead default model (2026-08-21)
+
+Goal of this pass: an operator supplies **one** Groq API key and the app runs. Four things stood in the way.
+
+**1. The default Groq model had been decommissioned.** `DEFAULT_GROQ_MODEL` was `llama-3.3-70b-versatile`,
+chosen from knowledge that predates Groq's retirement of it. Groq's deprecations page
+(https://console.groq.com/docs/deprecations) records it as announced 2026-06-17 and **shut down 2026-08-16**
+— five days before this pass — and it no longer appears in the models list at all. A key alone would therefore
+NOT have produced a working app: every turn would have failed with a decommissioned-model error. The default is
+now **`openai/gpt-oss-120b`**, which is Groq's own stated replacement for that id, is Production tier (the Qwen
+alternative `qwen/qwen3.6-27b` is Preview, which Groq says should not be used in production), and supports the
+local tool use the 19-tool loop needs. One behavioural difference is recorded rather than papered over: gpt-oss
+models do **not** support parallel tool calls, so the runner takes more rounds where Llama would have batched;
+the result is the same because `runner.ts` already loops per round, and its round ceiling degrades honestly
+rather than truncating: after `maxToolRounds` (default 4) it makes one final tool-less call so the user still
+gets a real answer. A flow that Llama could have batched into one round can therefore end in a summary instead
+of a completed call — visible, not silent. `runTurn` already accepts `maxToolRounds`, so the fix if that shows
+up in practice is a larger value at the call site; `runner.ts` was deliberately not changed here. Deviation flagged: the build request named
+`llama-3.3-70b-versatile` as the default, and shipping a dead id would have been a fake-working default
+(rule 1). Every occurrence was swept, including the `llama-3.1-8b-instant` example (also shut down 2026-08-16
+→ `openai/gpt-oss-20b`).
+
+**2. A typo'd `AI_PROVIDER` produced a detail-free 500.** `aiProviderName()` throws a plain `Error` on an
+unrecognised value, and `toHttpError` maps anything unrecognised to `{status: 500, error: "internal error"}` —
+so `AI_PROVIDER="grok"` told the operator nothing at all. `app/api/ai/turn/route.ts` now resolves the provider
+through one `resolveProvider()` helper that converts both configuration failures (no key for the selected
+provider; a value that is not a provider) into an honest **503 naming the fix**. The 503 body is deliberately a
+_reason fragment_ (`no GROQ_API_KEY (see LIMITATIONS.md step 3)`) because the UI composes it into a sentence.
+
+**3. The two UI strings (26.4).** `app/create/CreateGoal.tsx` and `app/check-in/CheckIn.tsx` hardcoded
+"(no GEMINI_API_KEY)" in the 503 branch, which was simply false under `AI_PROVIDER="groq"`. Both now render the
+server's own reason — so they are correct for every provider, including any future one, with no third place to
+keep in sync.
+
+**4. `cli commands doctor` (26.4).** It reported `GEMINI_API_KEY` presence only, so it would call a healthy Groq
+deployment unconfigured. It now imports `aiProviderName()`/`aiApiKeyEnvVar()` from the factory — the same source
+of truth as the route, not a copy — and prints `ai provider`, `ai key required`, `ai configured`, plus the
+presence of **both** model keys (holding both in one env is fine; only the selected one is required). An invalid
+`AI_PROVIDER` renders as `INVALID — <reason>` instead of crashing the report. `--strict` still gates on chain
+reachability only; it deliberately does not fail on an unconfigured AI, which is a supported state.
+
+**Still not verified here:** the live Groq call. The key-gated `lib/ai/groq.integration.test.ts` is the proof and
+it still skips — nobody has run a real request against `openai/gpt-oss-120b` from this repo. The wire format,
+correlation, error paths and privacy boundary are proven by always-on tests; real Groq acceptance is not.

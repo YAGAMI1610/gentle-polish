@@ -212,7 +212,9 @@ export default function CheckIn() {
       {aiTurn.isError && (
         <p className="mt-4 rounded-lg border border-caution/40 bg-caution-soft px-3 py-2 text-xs leading-relaxed">
           {aiUnavailable
-            ? "The AI isn't configured on this server yet (no GEMINI_API_KEY). You can still record a check-in note below."
+            ? `The AI isn't configured on this server yet — ${
+                aiTurn.error?.message ?? "no provider API key is set"
+              }. You can still record a check-in note below.`
             : `Couldn't reach your agent: ${aiTurn.error?.message ?? "unknown error"}`}
         </p>
       )}
