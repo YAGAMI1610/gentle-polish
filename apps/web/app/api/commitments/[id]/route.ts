@@ -18,7 +18,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     if (!commitment) return NextResponse.json({ error: "not found" }, { status: 404 });
     return NextResponse.json(await loadCommitmentView(wallet, commitment));
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/commitments/[id]");
     return NextResponse.json(body, { status });
   }
 }

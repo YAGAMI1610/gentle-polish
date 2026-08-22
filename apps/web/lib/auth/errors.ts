@@ -86,8 +86,20 @@ export interface HttpErrorShape {
   readonly body: { readonly error: string };
 }
 
-/** Map any thrown value to a safe { status, body }. Never leaks internal detail. */
-export function toHttpError(err: unknown): HttpErrorShape {
+/**
+ * Map any thrown value to a safe { status, body }. Never leaks internal detail
+ * to the HTTP client.
+ *
+ * The 500 branch is the ONLY one that hides its cause from the caller (by design:
+ * an unexpected throw may carry a stack, a DB DSN, a provider body). That same
+ * hiding is what turned two real production failures into a content-free
+ * "internal error" with nothing in the logs to go on. So the 500 branch — and
+ * only the 500 branch — logs the actual error server-side first. `context` names
+ * the call site (e.g. "api/commitments") so the log line is greppable; the client
+ * response is unchanged. Non-500 branches are already self-describing and stay
+ * quiet to avoid noise.
+ */
+export function toHttpError(err: unknown, context = "api"): HttpErrorShape {
   if (err instanceof UnauthorizedError) return { status: 401, body: { error: err.message } };
   if (err instanceof ForbiddenError) return { status: 403, body: { error: err.message } };
   // Non-leaking: a scope violation must not reveal whether the row exists.
@@ -110,5 +122,8 @@ export function toHttpError(err: unknown): HttpErrorShape {
     return { status: 503, body: { error: err.message } };
   if (err instanceof ServiceUnavailableError) return { status: 503, body: { error: err.message } };
   if (err instanceof ZodError) return { status: 400, body: { error: "invalid request" } };
+  // Unexpected: log the real error server-side (stack included) so an operator can
+  // see WHAT broke — the client still gets only the opaque 500 below.
+  console.error(`[${context}] unhandled error mapped to 500:`, err);
   return { status: 500, body: { error: "internal error" } };
 }

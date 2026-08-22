@@ -11,7 +11,7 @@ export async function GET() {
     const wallet = await requireWallet();
     return NextResponse.json(await loadRewardViews(wallet));
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/rewards");
     return NextResponse.json(body, { status });
   }
 }

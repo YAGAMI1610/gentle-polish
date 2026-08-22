@@ -13,7 +13,7 @@ export async function POST(req: Request) {
     session.destroy();
     return NextResponse.json({ ok: true });
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/auth/logout");
     return NextResponse.json(body, { status });
   }
 }

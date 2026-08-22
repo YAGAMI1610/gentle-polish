@@ -71,12 +71,11 @@ function CreateCommitmentFlow() {
   const [step, setStep] = useState(0);
   const [goalId, setGoalId] = useState("");
   const [amount, setAmount] = useState("20");
-  const [reward, setReward] = useState("3");
   const [releaseCondition, setReleaseCondition] = useState(
     "Every milestone is verified by the deadline.",
   );
   const [failurePath, setFailurePath] = useState(
-    "Your principal is returned in full; only the reward is forfeited.",
+    "Your principal stays locked until the goal is met; it is never taken from you.",
   );
   const [prepared, setPrepared] = useState<PrepareCommitmentResult | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -104,7 +103,9 @@ function CreateCommitmentFlow() {
       const result = await prepareCommitment.mutateAsync({
         goalId,
         principalWei,
-        rewardWei: toWei(reward) ?? "0",
+        // Reward concept removed: a commitment returns exactly its principal on
+        // success. No reward leg is ever configured (always 0 on-chain).
+        rewardWei: "0",
         releaseCondition: releaseCondition.trim(),
         failurePath: failurePath.trim(),
       });
@@ -135,7 +136,7 @@ function CreateCommitmentFlow() {
           title: `Create commitment${goal ? ` for "${goal.title}"` : ""}`,
           goalId,
           ...(prepared.draftCommitmentId ? { commitmentId: prepared.draftCommitmentId } : {}),
-          detail: `${amount} BOT principal, ${toWei(reward) ? reward : "0"} BOT reward`,
+          detail: `${amount} BOT principal, returned in full on success`,
         },
       });
       setStep(4);
@@ -180,27 +181,19 @@ function CreateCommitmentFlow() {
 
         {step === 1 && (
           <div className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <Label htmlFor="amount">Amount to lock (BOT)</Label>
-                <Input
-                  id="amount"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  inputMode="decimal"
-                  className="mt-2"
-                />
-              </div>
-              <div>
-                <Label htmlFor="reward">Reward on success (BOT)</Label>
-                <Input
-                  id="reward"
-                  value={reward}
-                  onChange={(e) => setReward(e.target.value)}
-                  inputMode="decimal"
-                  className="mt-2"
-                />
-              </div>
+            <div>
+              <Label htmlFor="amount">Amount to lock (BOT)</Label>
+              <Input
+                id="amount"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                inputMode="decimal"
+                className="mt-2"
+              />
+              <p className="mt-2 text-xs text-muted-foreground">
+                This is returned to you in full when the goal is verified — you get back exactly
+                what you put in, nothing more, nothing less.
+              </p>
             </div>
             <div>
               <Label htmlFor="release">Released when…</Label>
@@ -252,8 +245,8 @@ function CreateCommitmentFlow() {
                 {amount} BOT{goal ? ` until ${formatDate(goal.deadline)}` : ""}
               </p>
               <p>
-                <span className="font-medium">Reward on success: </span>
-                {toWei(reward) ? reward : "0"} BOT
+                <span className="font-medium">On success: </span>
+                your {amount} BOT is returned in full — there is no separate reward.
               </p>
               <p>
                 <span className="font-medium">Released when: </span>
@@ -455,7 +448,7 @@ function CommitmentCard({ commitment }: { commitment: Commitment }) {
           </div>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Reward on success: {commitment.reward} {commitment.token}
+          Returned in full when the goal is verified.
         </p>
 
         <div className="mt-4 space-y-2 rounded-xl bg-muted/50 p-3 text-sm">

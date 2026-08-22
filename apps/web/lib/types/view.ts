@@ -53,7 +53,6 @@ export interface Commitment {
   goalId: string;
   goalTitle: string;
   amountLocked: number;
-  reward: number;
   token: string;
   status: "active" | "completed" | "cancelled";
   /**

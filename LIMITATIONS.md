@@ -2191,3 +2191,94 @@ reachability only; it deliberately does not fail on an unconfigured AI, which is
 **Still not verified here:** the live Groq call. The key-gated `lib/ai/groq.integration.test.ts` is the proof and
 it still skips — nobody has run a real request against `openai/gpt-oss-120b` from this repo. The wire format,
 correlation, error paths and privacy boundary are proven by always-on tests; real Groq acceptance is not.
+
+## 27. Production error-logging + reward-concept removal (2026-08-22)
+
+**Status:** real and verified in-sandbox. `pnpm --filter web typecheck` → exit 0; full `pnpm --filter web test`
+→ **563 passed | 78 skipped** (exit 0); `forge test` → **80 passed, 0 failed** (contract untouched, re-run
+because the change is fund-flow-adjacent). Two things landed: the two production "internal error" symptoms are
+now diagnosable, and the reward concept is removed so a commitment returns exactly its staked principal.
+
+### 27.1 The two "internal error" symptoms were unlogged 500s — now logged (P0)
+
+Both reported failures — "Couldn't prepare the commitment: internal error" (commitment create) and "Couldn't
+reach your agent: internal error" (`/check-in`) — were the SAME root cause: `toHttpError`'s 500 fallback
+returned an opaque `{error:"internal error"}` and logged **nothing** server-side, so the real cause never
+reached the logs. The 500 branch (and only the 500 branch — the self-describing 4xx/503 branches stay quiet to
+avoid noise) now `console.error`s the actual error object (stack included) behind a `context` tag before
+returning the unchanged opaque body to the client (`lib/auth/errors.ts`). All **24** `app/api/*` call sites now
+pass a route-derived context (e.g. `toHttpError(err, "api/commitments")`, `toHttpError(err, "api/ai/turn")`) —
+zero bare `toHttpError(err)` remain — so the next occurrence prints a greppable `[api/commitments] unhandled
+error mapped to 500: …` line naming the failing route. The client contract is byte-for-byte unchanged; only the
+server log gained the cause.
+
+This is a **diagnosability** fix, not a root-cause fix for whatever is actually throwing: the likely culprits
+the user flagged (unset `COMMITMENT_VAULT_ADDRESS` / attestor keys → the chain path returns an honest
+`{prepared:false, reason}`, not a 500; a bad/stale prod `GROQ_API_KEY` that passes the `configured()` check then
+fails the live Groq call → a 500 from the provider fetch) will now surface in the logs with their real message.
+Read the production log line to see which one it is.
+
+### 27.2 Reward concept removed — you get back exactly what you staked (P1)
+
+Product decision (user): a commitment has no separate reward; completing it returns exactly the staked
+**principal**. Removed everywhere, defense-in-depth, with the DB draft and the on-chain calldata kept consistent:
+
+- **Single schema chokepoint (`lib/db/schemas.ts`).** `createDraftCommitmentInput.rewardWei` is now
+  `weiSchema.default("0").transform(() => "0")` — any value is validated then coerced to `"0"`. Both the REST
+  route and `createDraftCommitment` parse through this, so **neither the persisted draft nor the calldata can
+  carry a nonzero reward**, whatever a client or the model sends. This closed a real latent inconsistency: the
+  `createCommitment` tool forced the _calldata_ reward to 0 but wrote the _draft_ from the raw input, so a
+  requested `rewardWei:"500"` would have persisted a phantom 500 on the draft while the calldata said 0. Now
+  both are 0. (Proven by `createCommitment.test.ts`: input `rewardWei:"500"` → decoded calldata reward `0n`
+  **and** `draft.rewardWei === "0"`.)
+- **AI tool + REST route** both force `rewardWei:"0"` explicitly (belt-and-suspenders with the schema);
+  `createCommitment.ts`'s model-facing `parameters` no longer advertises a `rewardWei` property.
+- **Payout view rewritten (`serializers.ts` `toRewardView`).** It now represents the _returnable principal_:
+  `claimable ⇐ APPROVED && !principalWithdrawn`, `claimed ⇐ principalWithdrawn && status !== CANCELLED`
+  (CANCELLED excluded because `cancelCommitment` also sets `principalWithdrawn`, and that refund is not a success
+  payout). This mirrors the contract's `releasePrincipal` guard exactly, so the UI never offers a release the
+  chain would reject. `Commitment.reward` was dropped from the view type (`lib/types/view.ts`).
+- **Claim path routes to `releasePrincipal`.** `app/api/commitments/[id]/prepare-claim/route.ts` now calls
+  `prepareReleasePrincipal` (pays the depositor 100% of principal on `Approved`) instead of `prepareClaimReward`.
+  `RewardsPage.tsx` / `AppShell` / metadata copy relabelled ("Your stake" / "release" / "Get back what you put
+  in"). Still prepare-only — the user's own wallet signs; the backend holds no fund-moving key (rules 2–3
+  intact, `contractClient.safety.test.ts` unchanged and green).
+
+**Depends on the item-12 reconciler, exactly like the old reward surface (no fake — rule 1).** `toRewardView`
+gates on the real `APPROVED` status. The DB `status` still stays `CREATED` until the on-chain approval/withdrawal
+reconciler (§14/§17 item 12) syncs it, so the payout surface lights up only once that sync runs — it is gated on
+the true status, never faked to look claimable.
+
+### 27.3 Vestigial reward machinery left in place, money-safe, documented (rule 6)
+
+Not removed, deliberately, to avoid destabilising fund-safety-tested code under a deadline:
+
+- **The AI `claimReward` tool stays registered** (`lib/ai/tools/claimReward.ts`). With reward always 0 it would
+  prepare a `claimReward` tx that reverts `NoRewardConfigured` on-chain — harmless (prepare-only, no funds move,
+  no fake), but a dead path in the product. It is kept because the anti-injection suite
+  (`antiInjection.test.ts`) enumerates the tool by name and asserts its "do not send" / "never moves funds"
+  description; renaming it touches two security-test files. The path users actually use — the `/rewards` UI +
+  the `prepare-claim` REST route — correctly calls `releasePrincipal`. **Production fix:** rename the tool to
+  `releasePrincipal` (updating the `antiInjection.test.ts` + `security.test.ts` enumerations and
+  `claimReward.test.ts`'s `functionName` assertion) and point it at `prepareReleasePrincipal`.
+- **The contract's `claimReward()` + reward-leg terms remain** in the deployed/immutable vault and the ABI
+  (`prepareClaimReward` / the `rewardWei` encoder param are still exported and unit-tested at the encoder level —
+  `contractClient.safety.test.ts:103` exercises `rewardWei: 500n` against the _encoder_, which is correct: the
+  contract still supports the field even though the product no longer sets it). No redeploy is required for the
+  reward removal — setting reward to 0 in the terms is sufficient and safe. **Production fix (optional):** drop
+  the reward parameters from `createCommitment` and remove `claimReward()` on the next redeploy.
+
+### 27.4 Mainnet migration (Issue 4) — NOT done, and deliberately not touched
+
+The user is doing the testnet→mainnet migration themselves and instructed that it be left alone. `lib/chain/
+botchain.ts` and `lib/chain/config.ts` are their **in-progress, uncommitted** work (a `NEXT_PUBLIC_BOTCHAIN_
+NETWORK` mainnet/testnet selector was mid-edit) and are **excluded from this change's commit** — nothing here
+reads a mainnet config or fabricates a mainnet deploy/address (rules 1–2). The one `prettier/prettier` lint +
+format warning in this run is in that in-progress `botchain.ts` and was left for the user; **every file this
+change touched is lint- and format-clean.** A real mainnet cutover still needs a funded mainnet deploy of
+`CommitmentVault`, its real address/chain-id/RPC/explorer, and the role separation in `contracts/DEPLOY.md` — a
+user action, per §2.
+
+**Secret hygiene (unchanged, still required):** the `GROQ_API_KEY` shared in chat earlier this session is
+exposed in the transcript and **must be rotated** at https://console.groq.com/keys; set the rotated key as the
+production `GROQ_API_KEY` (model `openai/gpt-oss-120b`, §26.6). It was never written into any committed file.

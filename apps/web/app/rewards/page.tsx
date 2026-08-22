@@ -3,11 +3,11 @@ import type { Metadata } from "next";
 import RewardsPage from "./RewardsPage";
 
 export const metadata: Metadata = {
-  title: "Rewards — CommitAI",
-  description: "Rewards earned from verified milestones and completed commitments.",
+  title: "Your stake — CommitAI",
+  description: "Release your staked funds back to yourself after a goal is verified.",
   openGraph: {
-    title: "Rewards — CommitAI",
-    description: "What you've earned, and what it came from.",
+    title: "Your stake — CommitAI",
+    description: "Get back exactly what you put in, once the goal is verified.",
   },
 };
 

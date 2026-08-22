@@ -37,7 +37,7 @@ const SECONDARY = [
   { to: "/create", label: "New goal with the agent", icon: MessageSquareHeart },
   { to: "/verify", label: "Submit evidence", icon: ListChecks },
   { to: "/activity", label: "Activity", icon: Activity },
-  { to: "/rewards", label: "Rewards", icon: Gift },
+  { to: "/rewards", label: "Your stake", icon: Gift },
   { to: "/achievements", label: "Achievements", icon: Award },
 ] as const;
 

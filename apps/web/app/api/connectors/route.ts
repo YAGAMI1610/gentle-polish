@@ -29,7 +29,7 @@ export async function GET() {
     };
     return NextResponse.json(body);
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/connectors");
     return NextResponse.json(body, { status });
   }
 }

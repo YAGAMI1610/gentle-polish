@@ -56,12 +56,8 @@ const parameters: Record<string, unknown> = {
       type: "string",
       pattern: "^\\d+$",
       description:
-        "Principal to stake, in wei (base-10 string). Locked later by the user's own tx.",
-    },
-    rewardWei: {
-      type: "string",
-      pattern: "^\\d+$",
-      description: "Optional reward, in wei (base-10 string). Defaults to 0.",
+        "Principal to stake, in wei (base-10 string). Locked later by the user's own tx. " +
+        "A commitment returns exactly this principal on success — there is no separate reward.",
     },
     deadline: {
       type: "string",
@@ -112,7 +108,10 @@ export const createCommitmentTool: ToolDefinition<
   async handler(args, ctx): Promise<CreateCommitmentResult> {
     const terms: CommitmentTermsResult = {
       principalWei: args.principalWei,
-      rewardWei: args.rewardWei ?? "0",
+      // Reward concept removed (product decision): a commitment returns exactly its
+      // principal on success, never a separate reward. Always 0 on-chain, regardless
+      // of any rewardWei the model might still emit — success pays back the stake only.
+      rewardWei: "0",
       deadline: args.deadline ? new Date(args.deadline).toISOString() : null,
       gracePeriodSeconds: args.gracePeriodSeconds ?? 0,
       confidenceThreshold: args.confidenceThreshold ?? 70,

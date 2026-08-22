@@ -61,7 +61,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ address });
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/auth/verify");
     // 4xx are expected auth/client outcomes and stay quiet; a 500 here is genuinely
     // unexpected (e.g. a missing SESSION_PASSWORD breaking getSession), so log it so
     // it is diagnosable server-side instead of an opaque "internal error".

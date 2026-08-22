@@ -37,7 +37,7 @@ export async function GET() {
     });
     return NextResponse.redirect(authorizeUrl);
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/connectors/github/start");
     return NextResponse.json(body, { status });
   }
 }

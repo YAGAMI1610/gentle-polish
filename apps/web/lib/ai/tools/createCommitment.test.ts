@@ -119,7 +119,9 @@ describe.skipIf(!dbReady)("createCommitment tool — handler (integration)", () 
     // Creation attaches NO value — the principal is locked later by the user's own tx.
     expect(result.transaction?.value).toBe("0");
 
-    // The calldata really is createCommitment(7, 1_000_000, 500, ...) — decoded from ABI.
+    // The calldata is createCommitment(7, 1_000_000, 0, ...) — decoded from ABI. Even
+    // though the input requested rewardWei "500", the reward concept was removed, so the
+    // schema coerces it to 0: success returns exactly the staked principal, never a reward.
     const decoded = decodeFunctionData({
       abi: commitmentVaultAbi,
       data: result.transaction!.data as `0x${string}`,
@@ -128,7 +130,7 @@ describe.skipIf(!dbReady)("createCommitment tool — handler (integration)", () 
     const cargs = decoded.args as readonly [bigint, bigint, bigint, bigint, bigint, number];
     expect(cargs[0]).toBe(7n);
     expect(cargs[1]).toBe(1_000_000n);
-    expect(cargs[2]).toBe(500n);
+    expect(cargs[2]).toBe(0n);
 
     // Only a DRAFT row was written — no on-chain anchors, no invented hash (rule 1).
     const draft = await getCommitmentByGoal(WALLET, goal.id);
@@ -137,6 +139,8 @@ describe.skipIf(!dbReady)("createCommitment tool — handler (integration)", () 
     expect(draft?.onchainCommitmentId).toBeNull();
     expect(draft?.txHash).toBeNull();
     expect(draft?.principalWei.toString()).toBe("1000000");
+    // The draft is reward-free too — the persisted terms match the zeroed calldata.
+    expect(draft?.rewardWei.toString()).toBe("0");
   });
 
   it("still saves the draft but prepares nothing when the goal is not yet on-chain", async () => {

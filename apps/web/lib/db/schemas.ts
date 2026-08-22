@@ -355,7 +355,14 @@ export type RecordChainTxInput = z.input<typeof recordChainTxInput>;
 export const createDraftCommitmentInput = z.object({
   goalId: idSchema,
   principalWei: weiSchema,
-  rewardWei: weiSchema.default("0"),
+  // Reward concept removed (product decision): a commitment returns exactly its principal
+  // on success — you get back what you put in, never a separate reward. The field is kept
+  // in the wire shape for back-compat, but any value is validated then coerced to "0", so
+  // neither the persisted draft nor the on-chain calldata can ever carry a nonzero reward,
+  // whatever a client or the model sends. This is the single chokepoint both the REST route
+  // and createDraftCommitment parse through — defense in depth with the UI + AI-tool zeroing.
+  // See LIMITATIONS.md.
+  rewardWei: weiSchema.default("0").transform(() => "0"),
   deadline: z.coerce.date().optional(),
   // Duration in seconds; bounded to a sane 10-year ceiling (the contract enforces
   // its own MAX_GRACE_PERIOD — a larger value simply reverts on-chain, honestly).

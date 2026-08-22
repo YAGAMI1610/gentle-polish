@@ -70,7 +70,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     };
     return NextResponse.json(body);
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/commitments/[id]/prepare-lock");
     return NextResponse.json(body, { status });
   }
 }

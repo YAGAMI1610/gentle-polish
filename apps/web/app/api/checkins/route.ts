@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     };
     return NextResponse.json(body, { status: 201 });
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/checkins");
     return NextResponse.json(body, { status });
   }
 }

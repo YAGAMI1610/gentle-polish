@@ -98,7 +98,7 @@ export async function POST(req: Request) {
     };
     return NextResponse.json(body, { status: 200 });
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/chain/reconcile");
     return NextResponse.json(body, { status });
   }
 }

@@ -14,12 +14,13 @@ import { formatDate, formatTxHash, usePrepareClaim, useRewards } from "@/hooks/u
 import { useSession } from "@/hooks/useSession";
 
 /**
- * A claimable reward with a real claim action (build step 9, phase 3; CLAUDE.md
- * rules 1–4). "Claim" prepares `claimReward` calldata and the DEPOSITOR's own
- * wallet signs it — the contract only ever pays the depositor, and only on an
- * APPROVED commitment, so an unearned claim reverts on-chain rather than being
- * faked here. The backend never signs. Honest gating when there is nothing to
- * claim on-chain yet.
+ * A releasable stake with a real release action (build step 9, phase 3; CLAUDE.md
+ * rules 1–4). Reward concept removed (product decision): completing a goal returns
+ * exactly the staked principal. "Release" prepares `releasePrincipal` calldata and
+ * the DEPOSITOR's own wallet signs it — the contract only ever pays the depositor,
+ * and only on an APPROVED commitment, so an unearned release reverts on-chain
+ * rather than being faked here. The backend never signs. Honest gating when there
+ * is nothing to release on-chain yet.
  */
 function ClaimableRewardCard({ reward }: { reward: Reward }) {
   const { isConnected } = useSession();
@@ -33,26 +34,26 @@ function ClaimableRewardCard({ reward }: { reward: Reward }) {
   async function claim() {
     setNotice(null);
     if (!reward.commitmentId) {
-      setNotice("This reward has no on-chain commitment to claim from yet.");
+      setNotice("This stake has no on-chain commitment to release from yet.");
       return;
     }
     try {
       const result = await prepareClaim.mutateAsync(reward.commitmentId);
       if (!result.configured) {
         setNotice(
-          "On-chain claiming isn't available on this server yet (CommitmentVault not configured).",
+          "On-chain release isn't available on this server yet (CommitmentVault not configured).",
         );
         return;
       }
       if (!result.prepared || !result.transaction) {
-        setNotice(result.reason ?? "This reward can't be claimed yet.");
+        setNotice(result.reason ?? "This stake can't be released yet.");
         return;
       }
       await chainTx.mutateAsync({
         transaction: result.transaction,
         record: {
-          kind: "CLAIM_REWARD",
-          title: `Claim reward for "${reward.goalTitle}"`,
+          kind: "RELEASE_PRINCIPAL",
+          title: `Release stake for "${reward.goalTitle}"`,
           commitmentId: reward.commitmentId,
           detail: `${reward.amount} ${reward.token}`,
         },
@@ -81,7 +82,7 @@ function ClaimableRewardCard({ reward }: { reward: Reward }) {
               className="inline-flex items-center gap-2 text-xs font-medium text-chain underline underline-offset-4"
             >
               <ExternalLink className="size-3.5" aria-hidden />
-              <span className="font-mono">{formatTxHash(chainTx.data.txHash)}</span> claimed
+              <span className="font-mono">{formatTxHash(chainTx.data.txHash)}</span> released
             </a>
           ) : (
             <Button
@@ -94,7 +95,7 @@ function ClaimableRewardCard({ reward }: { reward: Reward }) {
                 ? "Confirm in your wallet…"
                 : prepareClaim.isPending
                   ? "Preparing…"
-                  : "Claim"}
+                  : "Release"}
             </Button>
           )}
         </div>
@@ -106,8 +107,8 @@ function ClaimableRewardCard({ reward }: { reward: Reward }) {
         {error && (
           <p className="text-xs text-destructive">
             {error instanceof ApiError && error.status === 401
-              ? "Connect your wallet to claim your reward."
-              : `Couldn't claim the reward: ${error.message}`}
+              ? "Connect your wallet to release your stake."
+              : `Couldn't release your stake: ${error.message}`}
           </p>
         )}
       </CardContent>
@@ -124,25 +125,25 @@ export default function RewardsPage() {
   return (
     <AppShell>
       <PageHeader
-        eyebrow="Rewards"
-        title="Earned, not given"
-        description="Every reward here traces back to a milestone that passed verification."
+        eyebrow="Your stake"
+        title="Get back what you put in"
+        description="Complete a goal and your full stake is released back to you — no separate reward, no bonus, exactly what you locked."
       />
 
       {!isConnected && (
         <Card className="mb-5 border-caution/40 bg-caution-soft">
           <CardContent className="py-4 text-sm">
-            Connect your wallet to see and claim your rewards.
+            Connect your wallet to see and release your stake.
           </CardContent>
         </Card>
       )}
 
-      <h2 className="mb-3 text-lg">Ready to claim</h2>
+      <h2 className="mb-3 text-lg">Ready to release</h2>
       {claimable.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border p-10 text-center surface-grain">
           <Gift className="mx-auto size-8 text-muted-foreground" />
           <p className="mt-3 text-sm text-muted-foreground">
-            Nothing claimable yet. Rewards appear as milestones get verified.
+            Nothing to release yet. Your stake becomes releasable once the goal is verified.
           </p>
         </div>
       ) : (
@@ -153,9 +154,9 @@ export default function RewardsPage() {
         </div>
       )}
 
-      <h2 className="mb-3 mt-8 text-lg">Already claimed</h2>
+      <h2 className="mb-3 mt-8 text-lg">Already released</h2>
       {claimed.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No rewards claimed yet.</p>
+        <p className="text-sm text-muted-foreground">No stake released yet.</p>
       ) : (
         <div className="space-y-3">
           {claimed.map((r) => (
@@ -164,7 +165,7 @@ export default function RewardsPage() {
                 <div>
                   <p className="text-sm font-medium">{r.goalTitle}</p>
                   <p className="text-xs text-muted-foreground">
-                    Claimed {r.claimedAt ? formatDate(r.claimedAt) : "—"}
+                    Released {r.claimedAt ? formatDate(r.claimedAt) : "—"}
                   </p>
                 </div>
                 <span className="text-sm text-muted-foreground">

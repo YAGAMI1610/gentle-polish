@@ -17,7 +17,7 @@ export async function GET() {
     const wallet = await requireWallet();
     return NextResponse.json(await loadCommitmentViews(wallet));
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/commitments");
     return NextResponse.json(body, { status });
   }
 }
@@ -44,7 +44,9 @@ export async function POST(req: Request) {
 
     const terms: CommitmentTermsDto = {
       principalWei: args.principalWei,
-      rewardWei: args.rewardWei ?? "0",
+      // Reward removed (product decision) — always 0; the schema already coerces
+      // args.rewardWei to "0", set here explicitly so the calldata can't carry a reward.
+      rewardWei: "0",
       deadline: args.deadline ? new Date(args.deadline).toISOString() : null,
       gracePeriodSeconds: args.gracePeriodSeconds ?? 0,
       confidenceThreshold: args.confidenceThreshold ?? 70,
@@ -121,7 +123,7 @@ export async function POST(req: Request) {
     };
     return NextResponse.json(body, { status: 201 });
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/commitments");
     return NextResponse.json(body, { status });
   }
 }

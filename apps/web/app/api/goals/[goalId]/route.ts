@@ -21,7 +21,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ goalId: string
     if (!goal) return NextResponse.json({ error: "not found" }, { status: 404 });
     return NextResponse.json(await loadGoalView(wallet, goal));
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/goals/[goalId]");
     return NextResponse.json(body, { status });
   }
 }

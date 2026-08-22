@@ -344,7 +344,6 @@ describe("toCommitmentView", () => {
   it("converts wei legs, maps status, and never invents a tx hash", () => {
     const view = toCommitmentView(commitmentRow(), "Read 12 books");
     expect(view.amountLocked).toBe(20);
-    expect(view.reward).toBe(3);
     expect(view.status).toBe("active");
     expect(view.goalTitle).toBe("Read 12 books");
     expect(view.txHash).toBe("");
@@ -372,62 +371,64 @@ describe("toCommitmentView", () => {
 });
 
 describe("toRewardView", () => {
-  it("returns null when there is no reward leg", () => {
-    expect(toRewardView(commitmentRow({ rewardWei: dec("0") }), "g")).toBeNull();
+  // Reward concept removed: this view now represents the returnable PRINCIPAL a
+  // depositor gets back on success (you get back exactly what you put in). The
+  // flags mirror the contract's `releasePrincipal` guard.
+  it("returns null when there is no principal", () => {
+    expect(toRewardView(commitmentRow({ principalWei: dec("0") }), "g")).toBeNull();
   });
 
-  it("returns null while the reward is neither claimable nor claimed", () => {
+  it("returns null while the principal is neither releasable nor released", () => {
+    // ACTIVE (not yet APPROVED) and not withdrawn — nothing to release yet.
     expect(toRewardView(commitmentRow({ status: CommitmentStatus.ACTIVE }), "g")).toBeNull();
   });
 
-  it("is claimable when APPROVED, funded, and not withdrawn", () => {
+  it("is claimable (releasable) when APPROVED and the principal is not withdrawn", () => {
     const reward = toRewardView(
       commitmentRow({
         status: CommitmentStatus.APPROVED,
-        rewardFunded: true,
-        rewardWithdrawn: false,
+        principalWithdrawn: false,
       }),
       "Read 12 books",
     );
     expect(reward?.state).toBe("claimable");
-    expect(reward?.amount).toBe(3);
-    expect(reward?.id).toBe("c1-reward");
+    // Amount is the staked PRINCIPAL (20 BOT), not a separate reward.
+    expect(reward?.amount).toBe(20);
+    expect(reward?.id).toBe("c1-payout");
     expect(reward?.commitmentId).toBe("c1");
     expect(reward?.earnedAt).toBe("2026-08-05T00:00:00.000Z");
     expect(reward && "claimedAt" in reward).toBe(false);
   });
 
-  it("is NOT claimable when APPROVED but the reward was never funded", () => {
-    // `claimReward` reverts RewardNotFunded on-chain, so an APPROVED-but-unfunded
-    // commitment must not surface a claimable reward the wallet could never collect.
+  it("is NOT releasable when locked but not yet APPROVED", () => {
+    // `releasePrincipal` reverts InvalidStatus unless the commitment is Approved, so
+    // an un-approved commitment must not surface a release the wallet could never do.
     expect(
       toRewardView(
         commitmentRow({
-          status: CommitmentStatus.APPROVED,
-          rewardFunded: false,
-          rewardWithdrawn: false,
+          status: CommitmentStatus.ACTIVE,
+          principalWithdrawn: false,
         }),
         "Read 12 books",
       ),
     ).toBeNull();
   });
 
-  it("is claimed once the reward has been withdrawn", () => {
+  it("is claimed once the principal has been released", () => {
     const reward = toRewardView(
-      commitmentRow({ status: CommitmentStatus.CLOSED, rewardWithdrawn: true }),
+      commitmentRow({ status: CommitmentStatus.CLOSED, principalWithdrawn: true }),
       "Read 12 books",
     );
     expect(reward?.state).toBe("claimed");
     expect(reward?.claimedAt).toBe("2026-08-05T00:00:00.000Z");
   });
 
-  it("is NOT a claimed reward when the commitment was cancelled", () => {
-    // cancelCommitment also sets rewardWithdrawn (the reward is refunded to its
-    // funder), but that is not a depositor "claim" — so a cancelled commitment
-    // must never appear as a claimed reward.
+  it("is NOT a success payout when the commitment was cancelled", () => {
+    // cancelCommitment also sets principalWithdrawn (a non-punitive refund), but that
+    // is not a success release — a cancelled commitment must never appear here.
     expect(
       toRewardView(
-        commitmentRow({ status: CommitmentStatus.CANCELLED, rewardWithdrawn: true }),
+        commitmentRow({ status: CommitmentStatus.CANCELLED, principalWithdrawn: true }),
         "Read 12 books",
       ),
     ).toBeNull();

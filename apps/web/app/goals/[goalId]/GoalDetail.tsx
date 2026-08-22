@@ -228,10 +228,10 @@ export default function GoalDetail({ goalId }: { goalId: string }) {
               </div>
               <div>
                 <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-chain/70">
-                  Reward on success
+                  Returned on success
                 </p>
                 <p className="text-display text-2xl leading-none text-chain">
-                  {commitment.reward}{" "}
+                  {commitment.amountLocked}{" "}
                   <span className="text-sm font-normal">{commitment.token}</span>
                 </p>
               </div>

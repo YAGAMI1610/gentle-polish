@@ -98,7 +98,7 @@ export async function POST(req: Request) {
     };
     return NextResponse.json(body);
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/ai/turn");
     return NextResponse.json(body, { status });
   }
 }

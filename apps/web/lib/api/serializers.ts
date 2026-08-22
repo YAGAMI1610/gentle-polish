@@ -110,9 +110,10 @@ export function commitmentStatusToView(status: CommitmentStatus): CommitmentView
  * Convert a wei `Decimal(78,0)` amount to a token number for display. The UI's
  * `amountLocked`/`reward`/`amount` fields are token-denominated numbers; the DB
  * and chain hold wei. `formatEther` gives the exact decimal string; `Number`
- * narrows for display (token amounts on this testnet are small — full-precision
- * wei never leaves the string boundary in fund flows, which use the wei string
- * directly for calldata).
+ * narrows for DISPLAY only — fund flows use the wei string directly for calldata,
+ * so this narrowing never touches a value that moves money. (Display of a very
+ * large mainnet balance can lose low-order precision in the JS number, which is
+ * a cosmetic rounding of the shown figure, not of any transacted amount.)
  */
 export function weiToTokenNumber(wei: Prisma.Decimal): number {
   return Number(formatEther(BigInt(wei.toString())));
@@ -213,7 +214,6 @@ export function toCommitmentView(
     goalId: c.goalId,
     goalTitle,
     amountLocked: weiToTokenNumber(c.principalWei),
-    reward: weiToTokenNumber(c.rewardWei),
     token: c.token,
     status: commitmentStatusToView(c.status),
     locked,
@@ -226,32 +226,38 @@ export function toCommitmentView(
 }
 
 /**
- * Reward is a VIEW over a commitment's reward leg, not a stored table (schema
- * comment). Both derived flags mirror the contract exactly so the UI never offers
- * a claim the chain would reject or mislabels a refund as a claim:
- *   - claimable ⇐ APPROVED **and** rewardFunded **and** not yet withdrawn.
- *     `claimReward` reverts `RewardNotFunded` when the reward was never funded, so
- *     an APPROVED-but-unfunded commitment must NOT show a claimable reward.
- *   - claimed ⇐ rewardWithdrawn **and** not CANCELLED. `rewardWithdrawn` is set true
- *     by BOTH `claimReward` (depositor collected the reward) and `cancelCommitment`
- *     (reward refunded to its funder); only the former is a genuinely "claimed"
- *     reward, so a cancelled commitment is never surfaced as one here.
- * A commitment with no reward, or one neither claimable nor claimed, yields no
- * reward row (returns null). `earnedAt`/`claimedAt` derive from the commitment's
- * `updatedAt` — the only real timestamp available without a dedicated column
- * (limitation noted in LIMITATIONS.md).
+ * The success-payout view over a commitment (not a stored table). The reward
+ * concept was removed as a product decision: completing a goal returns exactly the
+ * staked PRINCIPAL — you get back what you put in, never a separate reward. So this
+ * view represents the *returnable principal*, and its two flags mirror the
+ * contract's `releasePrincipal` guard exactly, so the UI never offers a release the
+ * chain would reject or mislabels a cancellation refund as a success payout:
+ *   - claimable ⇐ APPROVED **and** principal not yet withdrawn. `releasePrincipal`
+ *     reverts unless the commitment is `Approved` and pays out at most once, so an
+ *     un-approved or already-released commitment shows nothing to release.
+ *   - claimed ⇐ principalWithdrawn **and** not CANCELLED. `principalWithdrawn` is set
+ *     true by BOTH `releasePrincipal` (success payout) and `cancelCommitment`
+ *     (non-punitive refund); only the former is a success payout, so a cancelled
+ *     commitment is never surfaced here.
+ * A commitment that is neither claimable nor claimed yields no row (returns null).
+ *
+ * NOTE (LIMITATIONS item 12): the DB `status` is not yet reconciled from chain — it
+ * stays `CREATED` until the approval/withdrawal reconciler lands — so like the old
+ * reward surface, this lights up only once that sync exists. It is gated on the real
+ * `APPROVED` status rather than faked (CLAUDE.md rule 1). `earnedAt`/`claimedAt`
+ * derive from the commitment's `updatedAt`, the only real timestamp available.
  */
 export function toRewardView(c: CommitmentRow, goalTitle: string): RewardView | null {
-  const amount = weiToTokenNumber(c.rewardWei);
+  const amount = weiToTokenNumber(c.principalWei);
   if (amount <= 0) return null;
 
-  const claimed = c.rewardWithdrawn && c.status !== CommitmentStatus.CANCELLED;
-  const claimable = c.status === CommitmentStatus.APPROVED && c.rewardFunded && !c.rewardWithdrawn;
+  const claimed = c.principalWithdrawn && c.status !== CommitmentStatus.CANCELLED;
+  const claimable = c.status === CommitmentStatus.APPROVED && !c.principalWithdrawn;
   if (!claimed && !claimable) return null;
 
   const at = c.updatedAt.toISOString();
   return {
-    id: `${c.id}-reward`,
+    id: `${c.id}-payout`,
     goalTitle,
     commitmentId: c.id,
     amount,

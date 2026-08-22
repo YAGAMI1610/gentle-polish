@@ -20,7 +20,7 @@ export async function DELETE(req: Request) {
     const removed = await deleteConnector(wallet, "GITHUB");
     return NextResponse.json({ disconnected: removed > 0 });
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/connectors/github");
     return NextResponse.json(body, { status });
   }
 }

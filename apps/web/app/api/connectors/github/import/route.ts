@@ -47,7 +47,7 @@ export async function POST(req: Request) {
     if (err instanceof ConnectorNotConnectedError) {
       return NextResponse.json({ error: err.message }, { status: 409 });
     }
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/connectors/github/import");
     return NextResponse.json(body, { status });
   }
 }

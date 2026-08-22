@@ -15,7 +15,7 @@ export async function GET() {
     const wallet = await requireWallet();
     return NextResponse.json(await loadGoalViews(wallet));
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/goals");
     return NextResponse.json(body, { status });
   }
 }
@@ -33,7 +33,7 @@ export async function POST(req: Request) {
     const goal = await createGoal(wallet, (await readJsonBody(req)) as CreateGoalInput);
     return NextResponse.json(await loadGoalView(wallet, goal), { status: 201 });
   } catch (err) {
-    const { status, body } = toHttpError(err);
+    const { status, body } = toHttpError(err, "api/goals");
     return NextResponse.json(body, { status });
   }
 }
